@@ -9,6 +9,7 @@ mod router;
 mod serve;
 mod server;
 
+pub mod log;
 pub mod websocket;
 
 #[cfg(feature = "hot-reload")]
@@ -144,6 +145,7 @@ pub mod prelude {
         ResponseBody,
     };
     
+    pub use crate::log::init_log;
     pub use crate::{WebSocket, WebSocketMessage, WebSocketHandler, WebSocketRoom, is_websocket_upgrade, websocket_upgrade};
     
     #[cfg(feature = "hot-reload")]
