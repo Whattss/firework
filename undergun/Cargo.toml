@@ -1,0 +1,16 @@
+[package]
+name = "undergun"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+firework = { path = "../firework", features = ["hot-reload"] }
+firework-seaorm = { path = "../firework-seaorm" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sea-orm = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
+bcrypt = "0.15"
+jsonwebtoken = "9"
+chrono = { version = "0.4", features = ["serde"] }
+linkme = "0.3"

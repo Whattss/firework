@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Undergun - Home</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <h1 class="logo">Undergun</h1>
+            <div class="nav-links" id="navLinks">
+                <a href="/" class="active">Home</a>
+                <a href="/login" id="loginLink">Login</a>
+                <a href="/register" id="registerLink">Register</a>
+                <a href="#" id="logoutLink" style="display: none;">Logout</a>
+                <span id="userInfo" style="display: none;"></span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container main-content">
+        <div class="create-post-section" id="createPostSection" style="display: none;">
+            <h2>Create Post</h2>
+            <form id="createPostForm">
+                <input type="text" id="postTitle" placeholder="Title" required>
+                <textarea id="postContent" placeholder="What's on your mind?" required></textarea>
+                <button type="submit">Post</button>
+            </form>
+        </div>
+
+        <div class="posts-section">
+            <h2>Recent Posts</h2>
+            <div id="postsContainer">
+                <p class="loading">Loading posts...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
