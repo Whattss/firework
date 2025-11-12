@@ -6,7 +6,6 @@ members = [
     "plugins/auth",
     "fwk",
 ]
-exclude = ["undergun", "posts"]
 resolver = "2"
 
 [workspace.package]
