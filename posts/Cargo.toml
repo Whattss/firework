@@ -1,0 +1,9 @@
+[package]
+name = "posts"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+firework = { path = "../firework", features = [] }
+tokio = { version = "1", features = ["full"] }
+linkme  = "0.3"

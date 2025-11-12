@@ -6,7 +6,7 @@ members = [
     "firework-auth",
     "fwk",
 ]
-exclude = ["undergun"]
+exclude = ["undergun", "posts"]
 resolver = "2"
 
 [workspace.package]
