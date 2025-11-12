@@ -3,8 +3,6 @@
 /// Standard println!/eprintln! may not show output immediately in async tasks
 /// due to buffering. These functions ensure output is flushed.
 
-use std::io::Write;
-
 /// Print to stdout with immediate flush (works correctly in async contexts)
 #[macro_export]
 macro_rules! log {
