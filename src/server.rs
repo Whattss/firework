@@ -157,6 +157,11 @@ impl Server {
     }
 
     pub async fn listen(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Configure stdout/stderr to be unbuffered for immediate output in async contexts
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        
         let router = Arc::new(self.router);
         let middlewares = Arc::new(self.middlewares);
         let async_middlewares = Arc::new(self.async_middlewares);
@@ -222,9 +227,14 @@ impl Server {
             tokio::spawn(async move {
                 let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr, ws_routes).await;
                 
+                // Flush stdout/stderr to ensure logs from handlers are visible immediately
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                let _ = std::io::stderr().flush();
                 
                 if let Err(e) = result {
                     eprintln!("[ERROR] Connection handler error: {}", e);
+                    let _ = std::io::stderr().flush();
                 }
             });
         }
@@ -401,6 +411,11 @@ async fn handle_connection(
                                             }
                                         }
                                     }
+                                    
+                                    // Flush after middlewares to show their logs
+                                    use std::io::Write;
+                                    let _ = std::io::stdout().flush();
+                                    let _ = std::io::stderr().flush();
                                 }
 
                                 // Route and execute handler if not stopped
@@ -430,6 +445,12 @@ async fn handle_connection(
                                     {
                                         request.params = params;
                                         response = handler.call(request, response).await;
+                                        
+                                        // Flush stdout/stderr immediately after handler execution
+                                        // This ensures println!/eprintln! in handlers are visible
+                                        use std::io::Write;
+                                        let _ = std::io::stdout().flush();
+                                        let _ = std::io::stderr().flush();
                                     } else {
                                         response = Response::new(
                                             crate::response::StatusCode::NotFound,
