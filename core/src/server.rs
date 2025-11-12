@@ -44,7 +44,6 @@ pub struct Server {
     pub(crate) middlewares: Vec<Middleware>,
     pub(crate) async_middlewares: Vec<AsyncMiddleware>,
     prefix: String,
-    #[cfg(feature = "websockets")]
     ws_routes: std::collections::HashMap<String, Arc<dyn crate::websocket::WebSocketHandler>>,
 }
 
@@ -55,7 +54,6 @@ impl Server {
             middlewares: Vec::new(),
             async_middlewares: Vec::new(),
             prefix: String::new(),
-            #[cfg(feature = "websockets")]
             ws_routes: std::collections::HashMap::new(),
         }
     }
@@ -145,7 +143,6 @@ impl Server {
     }
     
     /// Register a WebSocket route
-    #[cfg(feature = "websockets")]
     pub fn websocket<H>(mut self, path: &str, handler: H) -> Self
     where
         H: crate::websocket::WebSocketHandler + 'static,
@@ -164,7 +161,6 @@ impl Server {
         let middlewares = Arc::new(self.middlewares);
         let async_middlewares = Arc::new(self.async_middlewares);
         
-        #[cfg(feature = "websockets")]
         let ws_routes = Arc::new(self.ws_routes);
 
         // Load config if not already loaded
@@ -221,15 +217,11 @@ impl Server {
             let middlewares = Arc::clone(&middlewares);
             let async_middlewares = Arc::clone(&async_middlewares);
             
-            #[cfg(feature = "websockets")]
             let ws_routes = Arc::clone(&ws_routes);
 
             tokio::spawn(async move {
-                #[cfg(feature = "websockets")]
                 let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr, ws_routes).await;
                 
-                #[cfg(not(feature = "websockets"))]
-                let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr).await;
                 
                 if let Err(e) = result {
                     eprintln!("[ERROR] Connection handler error: {}", e);
@@ -252,7 +244,6 @@ impl Default for Server {
     }
 }
 
-#[cfg(feature = "websockets")]
 async fn handle_connection(
     mut socket: TcpStream,
     router: Arc<Router>,
@@ -415,7 +406,6 @@ async fn handle_connection(
                                 // Route and execute handler if not stopped
                                 if !stopped {
                                     // Check if this is a WebSocket upgrade request
-                                    #[cfg(feature = "websockets")]
                                     if crate::websocket::is_websocket_upgrade(&request) {
                                         if let Some(ws_handler) = ws_routes.get(path_only) {
                                             // Perform WebSocket handshake
@@ -613,222 +603,6 @@ async fn write_response(
     Ok(())
 }
 
-// Version without WebSockets support
-#[cfg(not(feature = "websockets"))]
-async fn handle_connection(
-    mut socket: TcpStream,
-    router: Arc<Router>,
-    middlewares: Arc<Vec<Middleware>>,
-    async_middlewares: Arc<Vec<AsyncMiddleware>>,
-    remote_addr: std::net::SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut read_buf = get_buffer();
-
-    loop {
-        // Read request data
-        read_buf.clear();
-
-        let mut total_read = 0;
-        loop {
-            if read_buf.len() >= BUFFER_SIZE * 2 {
-                // Request too large, reject
-                return Err("Request too large".into());
-            }
-
-            read_buf.resize(read_buf.len() + 4096, 0);
-            match socket.read(&mut read_buf[total_read..]).await {
-                Ok(0) => {
-                    return_buffer(read_buf);
-                    return Ok(()); // Connection closed
-                }
-                Ok(n) => {
-                    total_read += n;
-                    read_buf.truncate(total_read);
-
-                    // Check if we have complete headers (look for \r\n\r\n)
-                    if let Some(pos) = find_header_end(&read_buf[..total_read]) {
-                        // Parse headers
-                        let mut headers = [httparse::EMPTY_HEADER; 64];
-                        let mut req = httparse::Request::new(&mut headers);
-
-                        match req.parse(&read_buf[..pos]) {
-                            Ok(httparse::Status::Complete(headers_len)) => {
-                                // Extract method, path, version
-                                let method = parse_method(req.method.unwrap_or("GET"));
-                                let path = req.path.unwrap_or("/");
-                                let version = parse_version(req.version.unwrap_or(1));
-
-                                // Parse headers into HashMap (reuse strings where possible)
-                                let mut header_map = HashMap::with_capacity(req.headers.len());
-                                let mut content_length = 0;
-                                let mut keep_alive = version == Version::Http11; // HTTP/1.1 defaults to keep-alive
-
-                                for header in req.headers {
-                                    let name = header.name;
-                                    let value = std::str::from_utf8(header.value).unwrap_or("");
-
-                                    if name.eq_ignore_ascii_case("content-length") {
-                                        content_length = value.parse().unwrap_or(0);
-                                    } else if name.eq_ignore_ascii_case("connection") {
-                                        keep_alive = value.eq_ignore_ascii_case("keep-alive");
-                                    }
-
-                                    header_map
-                                        .entry(name.to_string())
-                                        .or_insert_with(Vec::new)
-                                        .push(value.to_string());
-                                }
-
-                                // Read body if Content-Length > 0
-                                let body_start = headers_len;
-                                let body = if content_length > 0 {
-                                    let mut body_data = vec![0u8; content_length];
-                                    let already_read = total_read.saturating_sub(body_start);
-
-                                    if already_read > 0 {
-                                        let copy_len = already_read.min(content_length);
-                                        body_data[..copy_len].copy_from_slice(
-                                            &read_buf[body_start..body_start + copy_len],
-                                        );
-                                    }
-
-                                    if already_read < content_length {
-                                        socket.read_exact(&mut body_data[already_read..]).await?;
-                                    }
-
-                                    body_data
-                                } else {
-                                    Vec::new()
-                                };
-
-                                // Parse path and query
-                                let (path_only, query) = parse_path_and_query(path);
-                                let uri = Uri::new(path_only, query);
-
-                                // Create request (NO CLONING in hot path)
-                                let mut request = Request::new(
-                                    method,
-                                    uri,
-                                    version,
-                                    header_map,
-                                    body,
-                                    Some(remote_addr),
-                                );
-                                let mut response = Response::default();
-
-                                // Set keep-alive header early
-                                if keep_alive {
-                                    response.headers.insert(
-                                        "Connection".to_string(),
-                                        "keep-alive".to_string(),
-                                    );
-                                }
-
-                                // Execute middlewares (minimize cloning)
-                                let mut stopped = false;
-
-                                // Sync middlewares
-                                for (i, mw) in middlewares.iter().enumerate() {
-                                    let is_last =
-                                        i == middlewares.len() - 1 && async_middlewares.is_empty();
-                                    let req = if is_last {
-                                        request.clone() // Still need clone for the conditional
-                                    } else {
-                                        request.clone()
-                                    };
-
-                                    match mw(req, response) {
-                                        Flow::Stop(final_res) => {
-                                            response = final_res;
-                                            stopped = true;
-                                            break;
-                                        }
-                                        Flow::Next(r, s) => {
-                                            request = r;
-                                            response = s;
-                                        }
-                                    }
-                                }
-
-                                // Execute async middlewares if not stopped
-                                if !stopped {
-                                    for (i, mw) in async_middlewares.iter().enumerate() {
-                                        let is_last = i == async_middlewares.len() - 1;
-                                        let req = if is_last {
-                                            request.clone()
-                                        } else {
-                                            request.clone()
-                                        };
-
-                                        match mw(req, response).await {
-                                            Flow::Stop(final_res) => {
-                                                response = final_res;
-                                                stopped = true;
-                                                break;
-                                            }
-                                            Flow::Next(r, s) => {
-                                                request = r;
-                                                response = s;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Route and execute handler if not stopped
-                                if !stopped {
-                                    if let Some((handler, params)) =
-                                        router.find(&request.method, path_only)
-                                    {
-                                        request.params = params;
-                                        response = handler.call(request, response).await;
-                                    } else {
-                                        response = Response::new(
-                                            crate::response::StatusCode::NotFound,
-                                            b"Not Found\n",
-                                        );
-                                        if keep_alive {
-                                            response.headers.insert(
-                                                "Connection".to_string(),
-                                                "keep-alive".to_string(),
-                                            );
-                                        }
-                                    }
-                                }
-
-                                // Write response
-                                write_response(&mut socket, &mut response, keep_alive).await?;
-
-                                if !keep_alive {
-                                    return_buffer(read_buf);
-                                    return Ok(());
-                                }
-
-                                // Continue to next request on same connection
-                                break;
-                            }
-                            Ok(httparse::Status::Partial) => {
-                                // Need more data
-                                continue;
-                            }
-                            Err(_) => {
-                                return_buffer(read_buf);
-                                return Err("Invalid HTTP request".into());
-                            }
-                        }
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    tokio::task::yield_now().await;
-                    continue;
-                }
-                Err(e) => {
-                    return_buffer(read_buf);
-                    return Err(e.into());
-                }
-            }
-        }
-    }
-}
 
 /// Builder para crear scopes de rutas
 pub struct ServerScope {

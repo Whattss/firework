@@ -27,7 +27,6 @@ use std::pin::Pin;
 use std::future::Future;
 use tokio::net::TcpStream;
 
-#[cfg(feature = "websockets")]
 use tokio_tungstenite::{
     tungstenite::{
         protocol::{Message as WsMessage, Role},
@@ -36,7 +35,6 @@ use tokio_tungstenite::{
     WebSocketStream,
 };
 
-#[cfg(feature = "websockets")]
 use futures_util::{SinkExt, StreamExt};
 
 /// WebSocket message types
@@ -54,7 +52,6 @@ pub enum Message {
     Close,
 }
 
-#[cfg(feature = "websockets")]
 impl From<WsMessage> for Message {
     fn from(msg: WsMessage) -> Self {
         match msg {
@@ -68,7 +65,6 @@ impl From<WsMessage> for Message {
     }
 }
 
-#[cfg(feature = "websockets")]
 impl From<Message> for WsMessage {
     fn from(msg: Message) -> Self {
         match msg {
@@ -83,28 +79,19 @@ impl From<Message> for WsMessage {
 
 /// WebSocket connection
 pub struct WebSocket {
-    #[cfg(feature = "websockets")]
     stream: WebSocketStream<TcpStream>,
-    #[cfg(not(feature = "websockets"))]
-    _phantom: std::marker::PhantomData<()>,
 }
 
 impl WebSocket {
     /// Create a new WebSocket from a TCP stream
-    #[cfg(feature = "websockets")]
     pub(crate) async fn new(stream: TcpStream) -> Self {
         Self {
             stream: WebSocketStream::from_raw_socket(stream, Role::Server, None).await,
         }
     }
 
-    #[cfg(not(feature = "websockets"))]
-    pub(crate) fn new(_stream: TcpStream) -> Self {
-        panic!("WebSocket support is not enabled. Enable the 'websockets' feature.");
-    }
 
     /// Receive a message from the WebSocket
-    #[cfg(feature = "websockets")]
     pub async fn recv(&mut self) -> Option<Message> {
         match self.stream.next().await {
             Some(Ok(msg)) => Some(msg.into()),
@@ -112,31 +99,16 @@ impl WebSocket {
         }
     }
 
-    #[cfg(not(feature = "websockets"))]
-    pub async fn recv(&mut self) -> Option<Message> {
-        None
-    }
 
     /// Send a message to the WebSocket
-    #[cfg(feature = "websockets")]
     pub async fn send(&mut self, msg: Message) -> Result<(), WsError> {
         self.stream.send(msg.into()).await
     }
 
-    #[cfg(not(feature = "websockets"))]
-    pub async fn send(&mut self, _msg: Message) -> Result<(), ()> {
-        Err(())
-    }
 
     /// Close the WebSocket connection
-    #[cfg(feature = "websockets")]
     pub async fn close(&mut self) -> Result<(), WsError> {
         self.stream.close(None).await
-    }
-
-    #[cfg(not(feature = "websockets"))]
-    pub async fn close(&mut self) -> Result<(), ()> {
-        Err(())
     }
 
     /// Send text message (convenience method)
@@ -199,7 +171,6 @@ pub fn websocket_upgrade(req: &Request) -> Option<Response> {
 }
 
 /// Generate WebSocket accept key from client key
-#[cfg(feature = "websockets")]
 fn generate_accept_key(key: &str) -> String {
     use sha1::{Digest, Sha1};
     use base64::Engine;
@@ -212,10 +183,6 @@ fn generate_accept_key(key: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(&hash)
 }
 
-#[cfg(not(feature = "websockets"))]
-fn generate_accept_key(_key: &str) -> String {
-    String::new()
-}
 
 /// WebSocket room for managing multiple connections
 pub struct WebSocketRoom {

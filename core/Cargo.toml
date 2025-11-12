@@ -3,14 +3,10 @@ name = "firework"
 version = "0.1.0"
 edition = "2021"
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("websockets"))'] }
-
 [features]
 default = []
 testing = []
 hot-reload = ["notify", "cargo_metadata", "ctrlc"]
-websockets = ["tokio-tungstenite", "sha1", "base64"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -30,9 +26,9 @@ bytes = "1.5"
 httparse = "1.8"
 socket2 = "0.5"
 libc = "0.2"
-tokio-tungstenite = { version = "0.21", optional = true }
-sha1 = { version = "0.10", optional = true }
-base64 = { version = "0.21", optional = true }
+tokio-tungstenite = "0.21"
+sha1 = "0.10"
+base64 = "0.21"
 futures-util = "0.3"
 
 [dev-dependencies]
@@ -60,4 +56,3 @@ required-features = ["hot-reload"]
 [[example]]
 name = "websocket_chat"
 path = "examples/websocket_chat.rs"
-required-features = ["websockets"]

@@ -9,7 +9,6 @@ mod router;
 mod serve;
 mod server;
 
-#[cfg(feature = "websockets")]
 pub mod websocket;
 
 #[cfg(feature = "hot-reload")]
@@ -31,7 +30,6 @@ pub use router::Router;
 pub use serve::{serve_file, serve_dir, serve_static};
 pub use server::Server;
 
-#[cfg(feature = "websockets")]
 pub use websocket::{WebSocket, Message as WebSocketMessage, WebSocketHandler, WebSocketRoom, is_websocket_upgrade, websocket_upgrade};
 
 #[cfg(feature = "hot-reload")]
@@ -41,7 +39,6 @@ pub use hot_reload::HotReload;
 pub use test::{TestClient, TestRequest, TestResponse, TestExt};
 
 // Re-export macros
-#[cfg(feature = "websockets")]
 pub use firework_macros::{
     get, post, put, patch, delete, ws, middleware, routes, scope, 
     plugin, plugin_builder, firework_test,
@@ -49,13 +46,6 @@ pub use firework_macros::{
     depends_on, priority
 };
 
-#[cfg(not(feature = "websockets"))]
-pub use firework_macros::{
-    get, post, put, patch, delete, middleware, routes, scope, 
-    plugin, plugin_builder, firework_test,
-    on_init, on_start, on_shutdown, on_reload, on_request, on_response, on_stream_accept,
-    depends_on, priority
-};
 
 use std::future::Future;
 use std::pin::Pin;
@@ -104,7 +94,6 @@ pub struct ScopeMiddleware {
 #[linkme::distributed_slice]
 pub static ROUTES: [RouteInfo];
 
-#[cfg(feature = "websockets")]
 #[linkme::distributed_slice]
 pub static WS_ROUTES: [WsRouteInfo];
 
@@ -120,7 +109,6 @@ pub struct RouteInfo {
     pub handler: fn(Request, Response) -> Pin<Box<dyn Future<Output = Response> + Send>>,
 }
 
-#[cfg(feature = "websockets")]
 pub struct WsRouteInfo {
     pub path: &'static str,
     pub handler: fn(WebSocket) -> Pin<Box<dyn Future<Output = ()> + Send>>,
@@ -156,13 +144,11 @@ pub mod prelude {
         ResponseBody,
     };
     
-    #[cfg(feature = "websockets")]
     pub use crate::{WebSocket, WebSocketMessage, WebSocketHandler, WebSocketRoom, is_websocket_upgrade, websocket_upgrade};
     
     #[cfg(feature = "hot-reload")]
     pub use crate::HotReload;
     
-    #[cfg(feature = "websockets")]
     pub use firework_macros::{
         get, post, put, patch, delete, ws,
         middleware, routes, scope, 
@@ -171,14 +157,6 @@ pub mod prelude {
         depends_on, priority
     };
     
-    #[cfg(not(feature = "websockets"))]
-    pub use firework_macros::{
-        get, post, put, patch, delete,
-        middleware, routes, scope, 
-        plugin, plugin_builder, firework_test,
-        on_init, on_start, on_shutdown, on_reload, on_request, on_response, on_stream_accept,
-        depends_on, priority
-    };
     
     #[cfg(any(test, feature = "testing"))]
     pub use crate::{TestClient, TestRequest, TestResponse, TestExt};
