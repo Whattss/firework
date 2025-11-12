@@ -556,7 +556,7 @@ pub fn routes(_item: TokenStream) -> TokenStream {
                 };
             }
             
-            // Register WebSocket routes (only if websockets feature is enabled)
+            // Register WebSocket routes if websockets feature is enabled
             #[cfg(feature = "websockets")]
             {
                 for ws_route in ::firework::WS_ROUTES {

@@ -22,6 +22,9 @@ name = "{}"
 version = "0.1.0"
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = {{ level = "warn", check-cfg = ['cfg(feature, values("websockets"))'] }}
+
 [dependencies]
 firework = {{ git = "https://github.com/whattss/firework", features = [] }}
 tokio = {{ version = "1", features = ["full"] }}
@@ -34,6 +37,9 @@ linkme = "0.3"
 name = "{}"
 version = "0.1.0"
 edition = "2021"
+
+[lints.rust]
+unexpected_cfgs = {{ level = "warn", check-cfg = ['cfg(feature, values("websockets"))'] }}
 
 [dependencies]
 firework = {{ git = "https://github.com/whattss/firework", features = [] }}
@@ -50,6 +56,9 @@ linkme = "0.3"
 name = "{}"
 version = "0.1.0"
 edition = "2021"
+
+[lints.rust]
+unexpected_cfgs = {{ level = "warn", check-cfg = ['cfg(feature, values("websockets"))'] }}
 
 [dependencies]
 firework = {{ git = "https://github.com/whattss/firework", features = [] }}
