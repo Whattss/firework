@@ -7,7 +7,7 @@ A blazingly fast, declarative web framework for Rust with hot-reload, WebSockets
 ## Quick Start
 
 ```bash
-cargo install --path fwk
+cargo install --path firework-cli
 fwk new my-app
 cd my-app
 cargo run
@@ -24,39 +24,37 @@ async fn index() -> &'static str {
 }
 
 #[get("/users/:id")]
-async fn user(Path(id): Path<u32>) -> Json<User> {
-    Json(User::find(id).await)
+async fn user(Path(id): Path<u32>) -> String {
+    format!("User {}", id)
 }
 
 #[tokio::main]
 async fn main() {
-    routes!()
-        .listen("127.0.0.1:8080")
-        .await
-        .unwrap();
+    let server = routes!();
+    
+    println!("Server running on http://127.0.0.1:8080");
+    server.listen("127.0.0.1:8080").await.unwrap();
 }
 ```
 
 ## Features
 
-- **Fast**: 200k+ req/s with keep-alive
-- **Declarative**: `#[get("/path")]` route macros
-- **Flexible**: Multiple handler signatures
-- **WebSockets**: Built-in WebSocket support
+- **Fast**: 200k+ req/s with keep-alive and optimizations
+- **Declarative**: `#[get("/path")]` route macros with auto-registration
+- **Flexible**: Multiple handler signatures with extractors
+- **WebSockets**: Built-in WebSocket support with `#[ws("/path")]`
 - **Hot Reload**: Instant feedback during development
 - **Plugins**: Official SeaORM & Auth plugins
-- **Type-Safe**: Extractors for Path, Query, JSON, etc.
-
-## Documentation
-
-See `core/README.md` for detailed documentation.
+- **Type-Safe**: Extractors for Path, Query, JSON, Headers, etc.
+- **Minimal**: ~4k LOC core
 
 ## Project Structure
 
-- `core/` - Framework core
-- `macros/` - Procedural macros
-- `plugins/` - Official plugins (seaorm, auth)
-- `fwk/` - CLI tool
+- `src/` - Framework core
+- `examples/` - Usage examples
+- `firework-macros/` - Procedural macros
+- `firework-cli/` - CLI tool
+- `plugins/` - Official plugins (firework-seaorm, firework-auth)
 - `undergun/` - Real-world example app
 
 ## License
