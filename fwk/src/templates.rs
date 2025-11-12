@@ -25,6 +25,7 @@ edition = "2021"
 [dependencies]
 firework = {{ git = "https://github.com/whattss/firework", features = [] }}
 tokio = {{ version = "1", features = ["full"] }}
+linkme = "0.3"
 "#,
             name
         ),
@@ -40,6 +41,7 @@ firework-seaorm = {{ git = "https://github.com/whattss/firework" }}
 tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
+linkme = "0.3"
 "#,
             name
         ),
@@ -55,6 +57,7 @@ firework-seaorm = {{ git = "https://github.com/whattss/firework" }}
 tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
+linkme = "0.3"
 "#,
             name
         ),

@@ -11,7 +11,7 @@ websockets = ["tokio-tungstenite", "sha1", "base64"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-firework-macros = { path = "../firework-macros" }
+firework-macros = { path = "../macros" }
 linkme = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -33,7 +33,7 @@ base64 = { version = "0.21", optional = true }
 futures-util = "0.3"
 
 [dev-dependencies]
-firework-seaorm = { path = "../firework-seaorm" }
+firework-seaorm = { path = "../plugins/seaorm" }
 async-trait = "0.1"
 
 [[example]]

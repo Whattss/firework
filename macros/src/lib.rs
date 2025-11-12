@@ -556,10 +556,12 @@ pub fn routes(_item: TokenStream) -> TokenStream {
                 };
             }
             
-            // Register WebSocket routes
+            // Register WebSocket routes (only if websockets feature is enabled)
             #[cfg(feature = "websockets")]
-            for ws_route in ::firework::WS_ROUTES {
-                server = server.websocket(ws_route.path, ws_route.handler);
+            {
+                for ws_route in ::firework::WS_ROUTES {
+                    server = server.websocket(ws_route.path, ws_route.handler);
+                }
             }
             
             server

@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "firework",
-    "firework-macros",
-    "firework-seaorm",
-    "firework-auth",
+    "core",
+    "macros",
+    "plugins/seaorm",
+    "plugins/auth",
     "fwk",
 ]
 exclude = ["undergun", "posts"]

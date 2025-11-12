@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-firework = { path = "../firework", features = ["hot-reload"] }
-firework-seaorm = { path = "../firework-seaorm" }
+firework = { path = "../core", features = ["hot-reload"] }
+firework-seaorm = { path = "../plugins/seaorm" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
