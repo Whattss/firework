@@ -1,217 +1,118 @@
-import { useState, useEffect } from 'react'
-import './App.css'
+import { useState, useEffect } from 'react';
+import './App.css';
 
 function App() {
-  const [tweets, setTweets] = useState([])
-  const [newTweet, setNewTweet] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [tweets, setTweets] = useState([]);
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetchTweets()
-  }, [])
+    fetchTweets();
+  }, []);
 
   const fetchTweets = async () => {
-    setLoading(true)
-    try {
-      const res = await fetch('/api/tweets')
-      const data = await res.json()
-      setTweets(data)
-    } catch (err) {
-      console.error('Failed to fetch tweets:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
+    const res = await fetch('/api/tweets');
+    const data = await res.json();
+    setTweets(data);
+  };
 
-  const postTweet = async () => {
-    if (!newTweet.trim()) return
+  const postTweet = async (e) => {
+    e.preventDefault();
+    if (!content.trim() || content.length > 280) return;
     
-    try {
-      const res = await fetch('/api/tweets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: newTweet })
-      })
-      const tweet = await res.json()
-      setTweets([tweet, ...tweets])
-      setNewTweet('')
-    } catch (err) {
-      console.error('Failed to post tweet:', err)
-    }
-  }
+    setLoading(true);
+    await fetch('/api/tweets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    });
+    setContent('');
+    await fetchTweets();
+    setLoading(false);
+  };
 
   const toggleLike = async (id) => {
-    try {
-      const res = await fetch(`/api/tweets/${id}/like`, { method: 'POST' })
-      const updated = await res.json()
-      setTweets(tweets.map(t => t.id === id ? updated : t))
-    } catch (err) {
-      console.error('Failed to like tweet:', err)
-    }
-  }
+    await fetch(`/api/tweets/${id}/like`, { method: 'POST' });
+    await fetchTweets();
+  };
 
   const toggleRetweet = async (id) => {
-    try {
-      const res = await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' })
-      const updated = await res.json()
-      setTweets(tweets.map(t => t.id === id ? updated : t))
-    } catch (err) {
-      console.error('Failed to retweet:', err)
-    }
-  }
+    await fetch(`/api/tweets/${id}/retweet`, { method: 'POST' });
+    await fetchTweets();
+  };
 
   const formatTime = (timestamp) => {
-    const date = new Date(timestamp)
-    const now = new Date()
-    const diff = Math.floor((now - date) / 1000)
-    if (diff < 60) return `${diff}s`
-    if (diff < 3600) return `${Math.floor(diff / 60)}m`
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h`
-    return `${Math.floor(diff / 86400)}d`
-  }
-
-  const handleKeyDown = (e) => {
-    if (e.ctrlKey && e.key === 'Enter') {
-      postTweet()
-    }
-  }
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = Math.floor((now - date) / 1000);
+    
+    if (diff < 60) return `${diff}s`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    return `${Math.floor(diff / 86400)}d`;
+  };
 
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="logo">🔥</div>
-        <nav className="nav">
-          <a href="#" className="nav-item active">
-            <span className="icon">🏠</span>
-            <span>Home</span>
-          </a>
-          <a href="#" className="nav-item">
-            <span className="icon">🔍</span>
-            <span>Explore</span>
-          </a>
-          <a href="#" className="nav-item">
-            <span className="icon">🔔</span>
-            <span>Notifications</span>
-          </a>
-          <a href="#" className="nav-item">
-            <span className="icon">👤</span>
-            <span>Profile</span>
-          </a>
-        </nav>
-        <button className="tweet-btn">Post</button>
-      </aside>
+      <header className="header">
+        <h1>🔥</h1>
+      </header>
 
-      <main className="main">
-        <div className="header">
-          <h1>Home</h1>
-        </div>
-
-        <div className="composer">
-          <div className="avatar">👤</div>
-          <div className="composer-input">
-            <textarea
-              value={newTweet}
-              onChange={(e) => setNewTweet(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="What's happening?!"
-              maxLength={280}
-            />
-            <div className="composer-actions">
-              <span className={`char-count ${newTweet.length > 260 ? 'warning' : ''}`}>
-                {newTweet.length}/280
-              </span>
-              <button
-                onClick={postTweet}
-                disabled={!newTweet.trim()}
-                className="post-btn"
-              >
-                Post
-              </button>
-            </div>
+      <div className="container">
+        <form className="compose" onSubmit={postTweet}>
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder="What's happening?"
+            maxLength={280}
+            disabled={loading}
+          />
+          <div className="compose-footer">
+            <span className={content.length > 280 ? 'count error' : 'count'}>
+              {content.length}/280
+            </span>
+            <button type="submit" disabled={!content.trim() || loading}>
+              Tweet
+            </button>
           </div>
-        </div>
+        </form>
 
         <div className="timeline">
-          {loading && <div className="loading">Loading...</div>}
-          
-          {tweets.map((tweet) => (
-            <article key={tweet.id} className="tweet">
-              <div className="tweet-avatar">{tweet.avatar}</div>
-              <div className="tweet-content">
-                <div className="tweet-header">
+          {tweets.map(tweet => (
+            <div key={tweet.id} className="tweet">
+              <div className="tweet-header">
+                <span className="avatar">{tweet.avatar}</span>
+                <div className="tweet-info">
                   <span className="author">{tweet.author}</span>
                   <span className="handle">{tweet.handle}</span>
-                  <span className="timestamp">· {formatTime(tweet.timestamp)}</span>
-                </div>
-                <p className="tweet-text">{tweet.content}</p>
-                <div className="tweet-actions">
-                  <button className="action">
-                    <span className="icon">💬</span>
-                    {tweet.replies > 0 && <span>{tweet.replies}</span>}
-                  </button>
-                  <button
-                    className={`action ${tweet.retweeted ? 'active' : ''}`}
-                    onClick={() => toggleRetweet(tweet.id)}
-                  >
-                    <span className="icon">🔄</span>
-                    {tweet.retweets > 0 && <span>{tweet.retweets}</span>}
-                  </button>
-                  <button
-                    className={`action ${tweet.liked ? 'active' : ''}`}
-                    onClick={() => toggleLike(tweet.id)}
-                  >
-                    <span className="icon">{tweet.liked ? '❤️' : '🤍'}</span>
-                    {tweet.likes > 0 && <span>{tweet.likes}</span>}
-                  </button>
+                  <span className="time">· {formatTime(tweet.timestamp)}</span>
                 </div>
               </div>
-            </article>
+              <div className="tweet-content">{tweet.content}</div>
+              <div className="tweet-actions">
+                <button className="action">
+                  💬 {tweet.replies > 0 && tweet.replies}
+                </button>
+                <button 
+                  className={tweet.retweeted ? 'action active' : 'action'}
+                  onClick={() => toggleRetweet(tweet.id)}
+                >
+                  🔁 {tweet.retweets > 0 && tweet.retweets}
+                </button>
+                <button 
+                  className={tweet.liked ? 'action active' : 'action'}
+                  onClick={() => toggleLike(tweet.id)}
+                >
+                  {tweet.liked ? '❤️' : '��'} {tweet.likes > 0 && tweet.likes}
+                </button>
+                <button className="action">📊</button>
+              </div>
+            </div>
           ))}
         </div>
-      </main>
-
-      <aside className="widgets">
-        <div className="widget">
-          <h2>What's happening</h2>
-          <div className="trend">
-            <span className="category">Technology · Trending</span>
-            <h3>Firework Framework</h3>
-            <span className="count">12.5K posts</span>
-          </div>
-          <div className="trend">
-            <span className="category">Programming · Trending</span>
-            <h3>Rust Web Development</h3>
-            <span className="count">8.2K posts</span>
-          </div>
-          <div className="trend">
-            <span className="category">Tech · Trending</span>
-            <h3>Fullstack Rust</h3>
-            <span className="count">5.7K posts</span>
-          </div>
-        </div>
-
-        <div className="widget">
-          <h2>Who to follow</h2>
-          <div className="follow-item">
-            <div className="follow-avatar">🦀</div>
-            <div className="follow-info">
-              <div className="follow-name">Rust Foundation</div>
-              <div className="follow-handle">@rust_foundation</div>
-            </div>
-            <button className="follow-btn">Follow</button>
-          </div>
-          <div className="follow-item">
-            <div className="follow-avatar">⚡</div>
-            <div className="follow-info">
-              <div className="follow-name">Vite</div>
-              <div className="follow-handle">@vite_js</div>
-            </div>
-            <button className="follow-btn">Follow</button>
-          </div>
-        </div>
-      </aside>
+      </div>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;

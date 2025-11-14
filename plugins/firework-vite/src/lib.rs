@@ -105,7 +105,7 @@ impl VitePlugin {
         if check.is_err() {
             eprintln!("[Vite] Warning: Vite not found. Installing dependencies...");
             Command::new("npm")
-                .arg("install")
+                .args(&["install", "--production=false"])
                 .current_dir(&root)
                 .spawn()
                 .map_err(|e| Error::Internal(format!("Failed to install dependencies: {}", e)))?
@@ -115,10 +115,10 @@ impl VitePlugin {
 
         // Start Vite dev server
         let child = Command::new("npm")
-            .args(&["run", "dev", "--", "--port", &port.to_string()])
+            .args(&["run", "dev", "--", "--port", &port.to_string(), "--host", "0.0.0.0"])
             .current_dir(&root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| Error::Internal(format!("Failed to start Vite: {}", e)))?;
 
