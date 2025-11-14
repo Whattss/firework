@@ -4,13 +4,13 @@
 //! 
 //! ## Features
 //! - Hot Module Replacement (HMR) proxy
-//! - Development mode with Vite dev server
+//! - Development mode with Vite dev server  
 //! - Production build integration
 //! - Automatic asset serving
 //! - SSR support (future)
 //! - TypeScript API generation (future)
 
-use firework::prelude::*;
+use firework::{Flow, Method, Plugin, PluginError, PluginMetadata, PluginResult, Request, Response, Result, StatusCode, Error};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -184,8 +184,8 @@ impl Plugin for VitePlugin {
         "Vite"
     }
 
-    fn metadata(&self) -> firework::PluginMetadata {
-        firework::PluginMetadata {
+    fn metadata(&self) -> PluginMetadata {
+        PluginMetadata {
             name: "Vite",
             version: "0.1.0",
             author: "Firework Contributors",
@@ -193,7 +193,7 @@ impl Plugin for VitePlugin {
         }
     }
 
-    async fn on_init(&self) -> firework::PluginResult<()> {
+    async fn on_init(&self) -> PluginResult<()> {
         println!("[Vite] Initializing...");
 
         // Check if frontend directory exists
@@ -205,11 +205,11 @@ impl Plugin for VitePlugin {
         Ok(())
     }
 
-    async fn on_start(&self) -> firework::PluginResult<()> {
+    async fn on_start(&self) -> PluginResult<()> {
         if !self.is_production && self.config.auto_start {
             self.start_dev_server()
                 .await
-                .map_err(|e| firework::PluginError(format!("Failed to start Vite: {:?}", e)))?;
+                .map_err(|e| PluginError(format!("Failed to start Vite: {:?}", e)))?;
         } else if self.is_production {
             println!("[Vite] Production mode - serving static assets from {}", self.config.out_dir.display());
         }
@@ -217,7 +217,7 @@ impl Plugin for VitePlugin {
         Ok(())
     }
 
-    async fn on_shutdown(&self) -> firework::PluginResult<()> {
+    async fn on_shutdown(&self) -> PluginResult<()> {
         println!("[Vite] Shutting down...");
         
         let mut process = self.vite_process.write().await;
@@ -266,16 +266,16 @@ pub async fn vite_middleware(
                         code => StatusCode::Custom(code, "Vite".to_string()),
                     };
 
-                    *res = Response::new(status, body.to_vec());
+                    let mut new_res = Response::new(status, body.to_vec());
 
                     // Copy headers
                     for (key, value) in headers.iter() {
                         if let Ok(v) = value.to_str() {
-                            res.headers.insert(key.to_string(), v.to_string());
+                            new_res.headers.insert(key.to_string(), v.to_string());
                         }
                     }
 
-                    Flow::Stop(res.clone())
+                    Flow::Stop(new_res)
                 }
                 Err(_) => Flow::Continue,
             }
@@ -325,10 +325,10 @@ pub async fn serve_vite_assets(
                 _ => "application/octet-stream",
             };
 
-            *res = Response::new(StatusCode::Ok, contents);
-            res.headers.insert("Content-Type".to_string(), content_type.to_string());
+            let mut new_res = Response::new(StatusCode::Ok, contents);
+            new_res.headers.insert("Content-Type".to_string(), content_type.to_string());
             
-            Flow::Stop(res.clone())
+            Flow::Stop(new_res)
         }
         Err(_) => Flow::Continue,
     }
