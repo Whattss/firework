@@ -87,6 +87,9 @@ members = [
     "plugins/firework-proxy",
     "plugins/firework-vite",
 ]
+exclude = [
+    "examples/twitter-clone/backend",
+]
 resolver = "2"
 
 [workspace.package]
