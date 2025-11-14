@@ -1,126 +1,71 @@
-// 🔥 FIREWORK REVERSE PROXY - PRODUCTION GRADE
-// High-performance reverse proxy with Hyper, connection pooling, and circuit breaker
-
 use firework::prelude::*;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Semaphore};
+use std::time::Duration;
+use tokio::sync::{Mutex, RwLock};
 
-/// Configuration for a proxy target
-#[derive(Clone, Debug)]
-pub struct ProxyTarget {
-    pub path_prefix: String,
-    pub backend_url: String,
-    pub strip_prefix: bool,
-    pub timeout: Duration,
-    pub max_connections: usize,
+/// Load balancing strategy
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LoadBalancing {
+    RoundRobin,
+    LeastConnections,
+    IpHash,
+    Random,
 }
 
-impl ProxyTarget {
-    pub fn new(path_prefix: &str, backend_url: &str) -> Self {
+/// Backend configuration
+#[derive(Debug, Clone)]
+pub struct Backend {
+    pub url: String,
+    pub weight: u32,
+}
+
+impl Backend {
+    pub fn new(url: impl Into<String>) -> Self {
         Self {
-            path_prefix: path_prefix.to_string(),
-            backend_url: backend_url.to_string(),
-            strip_prefix: false,
-            timeout: Duration::from_secs(30),
-            max_connections: 100,
-        }
-    }
-
-    pub fn strip_prefix(mut self) -> Self {
-        self.strip_prefix = true;
-        self
-    }
-
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    pub fn max_connections(mut self, max: usize) -> Self {
-        self.max_connections = max;
-        self
-    }
-}
-
-/// Circuit breaker states
-#[derive(Debug, Clone, PartialEq)]
-enum CircuitState {
-    Closed,
-    Open { opened_at: Instant },
-    HalfOpen,
-}
-
-/// Circuit breaker for preventing cascade failures
-pub struct CircuitBreaker {
-    state: Arc<Mutex<CircuitState>>,
-    failure_threshold: usize,
-    success_threshold: usize,
-    timeout: Duration,
-    failures: Arc<Mutex<usize>>,
-    successes: Arc<Mutex<usize>>,
-}
-
-impl CircuitBreaker {
-    pub fn new(failure_threshold: usize, timeout: Duration) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(CircuitState::Closed)),
-            failure_threshold,
-            success_threshold: 2,
-            timeout,
-            failures: Arc::new(Mutex::new(0)),
-            successes: Arc::new(Mutex::new(0)),
+            url: url.into(),
+            weight: 1,
         }
     }
 }
 
-/// Connection pool for reusing HTTP connections
-pub struct ConnectionPool {
-    semaphore: Arc<Semaphore>,
-    circuit_breaker: Arc<CircuitBreaker>,
+/// Proxy route
+pub struct ProxyRoute {
+    pub pattern: Regex,
 }
 
-impl ConnectionPool {
-    pub fn new(max_connections: usize) -> Self {
-        Self {
-            semaphore: Arc::new(Semaphore::new(max_connections)),
-            circuit_breaker: Arc::new(CircuitBreaker::new(5, Duration::from_secs(60))),
-        }
+impl ProxyRoute {
+    pub fn new(pattern: &str) -> Result<Self> {
+        let regex = Regex::new(pattern)
+            .map_err(|e| Error::BadRequest(format!("Invalid pattern: {}", e)))?;
+        Ok(Self { pattern: regex })
+    }
+
+    pub fn matches(&self, path: &str) -> bool {
+        self.pattern.is_match(path)
     }
 }
 
-/// Context marker for proxied responses
-#[derive(Clone)]
-pub struct ProxiedResponse {
-    pub status: StatusCode,
-    pub headers: HashMap<String, String>,
-    pub body: Vec<u8>,
+/// Proxy router
+pub struct ProxyRouter {
+    routes: Vec<ProxyRoute>,
 }
 
-impl ProxiedResponse {
-    pub fn into_response(self) -> Response {
-        let mut response = Response::new(self.status, self.body);
-        response.headers = self.headers;
-        response
+impl ProxyRouter {
+    pub fn new() -> Self {
+        Self { routes: Vec::new() }
+    }
+
+    pub fn route(mut self, route: ProxyRoute) -> Self {
+        self.routes.push(route);
+        self
     }
 }
 
-/// Context marker for proxy failures
-#[derive(Clone)]
-pub struct ProxyFailed(pub String);
-
-/// Helper to check if request was proxied
-pub fn is_proxied(req: &Request) -> bool {
-    req.get_context::<ProxiedResponse>().is_some()
-}
-
-/// Get proxied response if available
-pub fn get_proxied_response(req: &Request) -> Option<Response> {
-    req.get_context::<ProxiedResponse>().map(|p| p.into_response())
-}
-
-/// Check if proxy failed
-pub fn proxy_failed(req: &Request) -> Option<String> {
-    req.get_context::<ProxyFailed>().map(|p| p.0.clone())
+impl Default for ProxyRouter {
+    fn default() -> Self {
+        Self::new()
+    }
 }

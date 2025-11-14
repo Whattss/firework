@@ -1,21 +1,21 @@
 [package]
-name = "firework-proxy"
+name = "firework-vite"
 version = "0.1.0"
 edition = "2021"
 authors = ["Firework Contributors"]
 license = "MIT"
+description = "Vite integration plugin for Firework - Fullstack Rust web development"
+
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
 firework = { path = "../.." }
 tokio = { version = "1", features = ["full"] }
-hyper = { version = "1.5", features = ["full"] }
-hyper-util = { version = "0.1", features = ["full"] }
-http-body-util = "0.1"
-http = "1"
-tower = "0.4"
-pin-project-lite = "0.2"
-regex = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rand = "0.8"
-url = "2.5"
+notify = "6"
+reqwest = { version = "0.12", features = ["json"] }
+
+[dev-dependencies]
+tokio-test = "0.4"

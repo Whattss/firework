@@ -85,6 +85,7 @@ members = [
     "plugins/firework-seaorm",
     "plugins/firework-auth",
     "plugins/firework-proxy",
+    "plugins/firework-vite",
 ]
 resolver = "2"
 
