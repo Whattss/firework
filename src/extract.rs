@@ -97,8 +97,14 @@ pub struct Body(pub String);
 #[async_trait::async_trait]
 impl FromRequest for Body {
     async fn from_request(req: &mut Request, _res: &mut Response) -> Result<Self> {
-        let body = String::from_utf8(req.body.clone())
-            .map_err(|_| Error::BadRequest("Invalid UTF-8 in body".into()))?;
+        // Move body out of request instead of cloning
+        let body_bytes = std::mem::take(&mut req.body);
+        let body = String::from_utf8(body_bytes)
+            .map_err(|e| {
+                // Restore body on error
+                req.body = e.into_bytes();
+                Error::BadRequest("Invalid UTF-8 in body".into())
+            })?;
         
         Ok(Body(body))
     }

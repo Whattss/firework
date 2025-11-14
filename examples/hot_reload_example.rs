@@ -60,14 +60,14 @@ async fn status(_req: Request, res: Response) -> Response {
 }
 
 #[middleware]
-fn logger(req: Request, res: Response) -> Flow {
+fn logger(req: &mut Request, res: &mut Response) -> Flow {
     println!(
         "[{:?}] {} - Request #{}",
         req.method,
         req.uri.path,
         REQUEST_COUNT.load(Ordering::SeqCst)
     );
-    Flow::Next(req, res)
+    Flow::Continue
 }
 
 #[tokio::main]

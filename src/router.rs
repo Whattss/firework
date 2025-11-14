@@ -67,34 +67,42 @@ impl RadixNode {
     pub fn search(&self, method: &Method, path: &str) -> Option<(HandlerBox, HashMap<String, String>)> {
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let method_str = method_to_string(method);
-        self.search_parts(&method_str, &parts, HashMap::new())
+        let mut params = HashMap::new();
+        self.search_iterative(&method_str, &parts, &mut params)
     }
-
-    fn search_parts(&self, method: &str, parts: &[&str], mut params: HashMap<String, String>) -> Option<(HandlerBox, HashMap<String, String>)> {
+    
+    fn search_iterative(&self, method: &str, parts: &[&str], params: &mut HashMap<String, String>) -> Option<(HandlerBox, HashMap<String, String>)> {
+        // Base case
         if parts.is_empty() {
-            return self.handlers.get(method).map(|h| (Arc::clone(h), params));
+            return self.handlers.get(method).map(|h| (Arc::clone(h), params.clone()));
         }
 
         let part = parts[0];
         let remaining = &parts[1..];
 
-        // Primero intentar match exacto
+        // Try exact match first
         for child in &self.children {
             if !child.is_param && child.path == part {
-                if let Some(result) = child.search_parts(method, remaining, params.clone()) {
+                if let Some(result) = child.search_iterative(method, remaining, params) {
                     return Some(result);
                 }
             }
         }
 
-        // Luego intentar match con parámetros
+        // Try param matches
         for child in &self.children {
             if child.is_param {
                 if let Some(param_name) = &child.param_name {
-                    params.insert(param_name.clone(), part.to_string());
-                }
-                if let Some(result) = child.search_parts(method, remaining, params.clone()) {
-                    return Some(result);
+                    let old_value = params.insert(param_name.to_string(), part.to_string());
+                    if let Some(result) = child.search_iterative(method, remaining, params) {
+                        return Some(result);
+                    }
+                    // Backtrack: restore old value
+                    if let Some(old) = old_value {
+                        params.insert(param_name.to_string(), old);
+                    } else {
+                        params.remove(param_name);
+                    }
                 }
             }
         }

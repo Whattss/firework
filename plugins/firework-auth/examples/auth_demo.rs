@@ -306,7 +306,7 @@ mod admin_routes {
 
 // Admin middleware - requires auth and admin role
 #[middleware]
-fn admin_middleware(mut req: Request, res: Response) -> Flow {
+fn admin_middleware(req: &mut Request, res: &mut Response) -> Flow {
     // First, require auth
     let token = match req.headers
         .get("authorization")
@@ -355,7 +355,7 @@ fn admin_middleware(mut req: Request, res: Response) -> Flow {
     }
 
     req.set_context(claims);
-    Flow::Next(req, res)
+    Flow::Continue
 }
 
 #[tokio::main]

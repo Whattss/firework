@@ -363,7 +363,7 @@ pub mod helpers {
     use firework::Response;
 
     /// Middleware to require authentication
-    pub fn require_auth(mut req: Request, res: Response) -> Flow {
+    pub fn require_auth(req: &mut Request, res: &mut Response) -> Flow {
         let token = match extract_token_from_header(&req) {
             Some(t) => t,
             None => {
@@ -393,7 +393,7 @@ pub mod helpers {
         match claims {
             Some(c) => {
                 req.set_context(c);
-                Flow::Next(req, res)
+                Flow::Continue
             }
             None => Flow::Stop(
                 firework::json!(serde_json::json!({
@@ -405,7 +405,7 @@ pub mod helpers {
     }
 
     /// Middleware for optional authentication (doesn't fail if no token)
-    pub fn optional_auth(mut req: Request, res: Response) -> Flow {
+    pub fn optional_auth(req: &mut Request, res: &mut Response) -> Flow {
         if let Some(token) = extract_token_from_header(&req) {
             let claims = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
@@ -425,7 +425,7 @@ pub mod helpers {
             }
         }
         
-        Flow::Next(req, res)
+        Flow::Continue
     }
 
     /// Convert AuthError to Response

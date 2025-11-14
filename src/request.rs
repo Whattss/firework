@@ -151,9 +151,9 @@ impl Request {
         self.uri.query.as_ref()?.get(name)
     }
     
-    /// Get the request body as a UTF-8 string
-    pub fn body_string(&self) -> Result<String, std::string::FromUtf8Error> {
-        String::from_utf8(self.body.clone())
+    /// Get the request body as a UTF-8 string (consumes body)
+    pub fn body_string(mut self) -> Result<String, std::string::FromUtf8Error> {
+        String::from_utf8(std::mem::take(&mut self.body))
     }
     
     /// Get the request body as a str slice

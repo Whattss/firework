@@ -49,16 +49,13 @@ impl TestClient {
 
         // Apply middlewares
         for mw in &self.middlewares {
-            match mw(request.clone(), response) {
+            match mw(&mut request, &mut response) {
                 Flow::Stop(final_res) => {
                     response = final_res;
                     stopped = true;
                     break;
                 }
-                Flow::Next(r, s) => {
-                    request = r;
-                    response = s;
-                }
+                Flow::Continue => {}
             }
         }
 
@@ -446,9 +443,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_middleware() {
-        fn add_header(req: Request, mut res: Response) -> Flow {
+        fn add_header(req: &mut Request, res: &mut Response) -> Flow {
             res.headers.insert("X-Middleware".to_string(), "active".to_string());
-            Flow::Next(req, res)
+            Flow::Continue
         }
 
         let server = Server::new()

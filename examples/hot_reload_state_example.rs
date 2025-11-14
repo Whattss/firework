@@ -96,14 +96,14 @@ async fn cache_hit(req: Request, res: Response) -> Response {
 }
 
 #[middleware]
-fn inject_state(mut req: Request, res: Response) -> Flow {
+fn inject_state(req: &mut Request, res: &mut Response) -> Flow {
     // In a real app, you'd initialize this once and share it
     static STATE: std::sync::OnceLock<AppState> = std::sync::OnceLock::new();
     
     let state = STATE.get_or_init(|| AppState::restore_or_new());
     req.set_context(state.clone());
     
-    Flow::Next(req, res)
+    Flow::Continue
 }
 
 #[tokio::main]

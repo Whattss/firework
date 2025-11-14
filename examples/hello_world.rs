@@ -11,8 +11,8 @@ async fn hello(Path(name): Path<String>) -> String {
 }
 
 #[middleware]
-async fn logger(req: Request, res: Response) -> Flow {
-    Flow::Next(req, res)
+async fn logger(req: &mut Request, res: &mut Response) -> Flow {
+    Flow::Continue
 }
 
 #[tokio::main]

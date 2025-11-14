@@ -54,7 +54,7 @@ use std::pin::Pin;
 #[derive(Debug)]
 pub enum Flow {
     Stop(Response),
-    Next(Request, Response),
+    Continue,
 }
 
 pub trait AsyncHandler: Send + Sync {
@@ -71,8 +71,8 @@ where
     }
 }
 
-pub type Middleware = fn(Request, Response) -> Flow;
-pub type AsyncMiddleware = fn(Request, Response) -> Pin<Box<dyn Future<Output = Flow> + Send>>;
+pub type Middleware = fn(&mut Request, &mut Response) -> Flow;
+pub type AsyncMiddleware = for<'a> fn(&'a mut Request, &'a mut Response) -> Pin<Box<dyn Future<Output = Flow> + Send + 'a>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiddlewarePhase {

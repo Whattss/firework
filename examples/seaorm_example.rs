@@ -24,7 +24,7 @@ impl ActiveModelBehavior for ActiveModel {}
 
 // Database middleware to inject connection and ensure table exists
 #[middleware]
-fn db_middleware(mut req: Request, res: Response) -> Flow {
+fn db_middleware(req: &mut Request, res: &mut Response) -> Flow {
     if let Some(db) = req.db() {
         // Ensure table exists (this is a hack for demo purposes - use migrations in production)
         tokio::task::block_in_place(|| {
@@ -53,7 +53,7 @@ fn db_middleware(mut req: Request, res: Response) -> Flow {
 
         req.set_context(db);
     }
-    Flow::Next(req, res)
+    Flow::Continue
 }
 
 // Routes

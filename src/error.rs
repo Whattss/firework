@@ -28,6 +28,28 @@ pub enum Error {
     Custom(String),
     /// Custom error with specific status code
     CustomWithCode(u16, String),
+    /// Conflict (409)
+    Conflict(String),
+    /// Gone (410)
+    Gone(String),
+    /// Payload Too Large (413)
+    PayloadTooLarge(String),
+    /// URI Too Long (414)
+    UriTooLong(String),
+    /// Too Many Requests (429)
+    TooManyRequests(String),
+    /// Service Unavailable (503)
+    ServiceUnavailable(String),
+    /// Gateway Timeout (504)
+    GatewayTimeout(String),
+    /// Method Not Allowed (405)
+    MethodNotAllowed(String),
+    /// Not Acceptable (406)
+    NotAcceptable(String),
+    /// Request Timeout (408)
+    RequestTimeout(String),
+    /// Unprocessable Entity (422)
+    UnprocessableEntity(String),
 }
 
 impl fmt::Display for Error {
@@ -44,6 +66,17 @@ impl fmt::Display for Error {
             Error::Internal(msg) => write!(f, "Internal error: {}", msg),
             Error::Custom(msg) => write!(f, "{}", msg),
             Error::CustomWithCode(code, msg) => write!(f, "Error {}: {}", code, msg),
+            Error::Conflict(msg) => write!(f, "Conflict: {}", msg),
+            Error::Gone(msg) => write!(f, "Gone: {}", msg),
+            Error::PayloadTooLarge(msg) => write!(f, "Payload too large: {}", msg),
+            Error::UriTooLong(msg) => write!(f, "URI too long: {}", msg),
+            Error::TooManyRequests(msg) => write!(f, "Too many requests: {}", msg),
+            Error::ServiceUnavailable(msg) => write!(f, "Service unavailable: {}", msg),
+            Error::GatewayTimeout(msg) => write!(f, "Gateway timeout: {}", msg),
+            Error::MethodNotAllowed(msg) => write!(f, "Method not allowed: {}", msg),
+            Error::NotAcceptable(msg) => write!(f, "Not acceptable: {}", msg),
+            Error::RequestTimeout(msg) => write!(f, "Request timeout: {}", msg),
+            Error::UnprocessableEntity(msg) => write!(f, "Unprocessable entity: {}", msg),
         }
     }
 }
@@ -63,22 +96,33 @@ impl From<serde_json::Error> for Error {
 }
 
 impl Error {
-    /// Convierte el error a una respuesta HTTP
+    /// Convierte el error a una respuesta HTTP (consume el error)
     pub fn into_response(self) -> crate::Response {
         use crate::{Response, StatusCode};
         
-        let (status, message) = match &self {
-            Error::ParseError(msg) => (StatusCode::BadRequest, msg.clone()),
+        let (status, message) = match self {
+            Error::ParseError(msg) => (StatusCode::BadRequest, msg),
             Error::IoError(err) => (StatusCode::InternalServerError, err.to_string()),
             Error::JsonError(err) => (StatusCode::BadRequest, err.to_string()),
-            Error::ValidationError(msg) => (StatusCode::BadRequest, msg.clone()),
-            Error::NotFound(msg) => (StatusCode::NotFound, msg.clone()),
-            Error::Unauthorized(msg) => (StatusCode::Custom(401, "Unauthorized".into()), msg.clone()),
-            Error::Forbidden(msg) => (StatusCode::Forbidden, msg.clone()),
-            Error::BadRequest(msg) => (StatusCode::BadRequest, msg.clone()),
-            Error::Internal(msg) => (StatusCode::InternalServerError, msg.clone()),
-            Error::Custom(msg) => (StatusCode::InternalServerError, msg.clone()),
-            Error::CustomWithCode(code, msg) => (StatusCode::Custom(*code, "Custom".into()), msg.clone()),
+            Error::ValidationError(msg) => (StatusCode::BadRequest, msg),
+            Error::NotFound(msg) => (StatusCode::NotFound, msg),
+            Error::Unauthorized(msg) => (StatusCode::Unauthorized, msg),
+            Error::Forbidden(msg) => (StatusCode::Forbidden, msg),
+            Error::BadRequest(msg) => (StatusCode::BadRequest, msg),
+            Error::Internal(msg) => (StatusCode::InternalServerError, msg),
+            Error::Custom(msg) => (StatusCode::InternalServerError, msg),
+            Error::CustomWithCode(code, msg) => (StatusCode::Custom(code, "Custom".into()), msg),
+            Error::Conflict(msg) => (StatusCode::Custom(409, "Conflict".into()), msg),
+            Error::Gone(msg) => (StatusCode::Custom(410, "Gone".into()), msg),
+            Error::PayloadTooLarge(msg) => (StatusCode::Custom(413, "Payload Too Large".into()), msg),
+            Error::UriTooLong(msg) => (StatusCode::Custom(414, "URI Too Long".into()), msg),
+            Error::TooManyRequests(msg) => (StatusCode::Custom(429, "Too Many Requests".into()), msg),
+            Error::ServiceUnavailable(msg) => (StatusCode::Custom(503, "Service Unavailable".into()), msg),
+            Error::GatewayTimeout(msg) => (StatusCode::Custom(504, "Gateway Timeout".into()), msg),
+            Error::MethodNotAllowed(msg) => (StatusCode::Custom(405, "Method Not Allowed".into()), msg),
+            Error::NotAcceptable(msg) => (StatusCode::Custom(406, "Not Acceptable".into()), msg),
+            Error::RequestTimeout(msg) => (StatusCode::Custom(408, "Request Timeout".into()), msg),
+            Error::UnprocessableEntity(msg) => (StatusCode::Custom(422, "Unprocessable Entity".into()), msg),
         };
         
         let body = serde_json::json!({

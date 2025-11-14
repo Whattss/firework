@@ -100,10 +100,10 @@ pub fn middleware(attr: TokenStream, item: TokenStream) -> TokenStream {
         );
         (
             quote! {
-                fn #wrapper_name(
-                    req: ::firework::Request,
-                    res: ::firework::Response
-                ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::firework::Flow> + ::std::marker::Send>> {
+                fn #wrapper_name<'a>(
+                    req: &'a mut ::firework::Request,
+                    res: &'a mut ::firework::Response
+                ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::firework::Flow> + ::std::marker::Send + 'a>> {
                     ::std::boxed::Box::pin(#fn_name(req, res))
                 }
             },
@@ -439,8 +439,8 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
                                         for mw in ::firework::SCOPE_MIDDLEWARES {
                                             if mw.name == stringify!(#pre_mw_idents) && mw.phase == ::firework::MiddlewarePhase::Pre {
                                                 let flow = match &mw.handler {
-                                                    ::firework::MiddlewareHandler::Sync(handler) => handler(request.clone(), response),
-                                                    ::firework::MiddlewareHandler::Async(handler) => handler(request.clone(), response).await,
+                                                    ::firework::MiddlewareHandler::Sync(handler) => handler(&mut request, &mut response),
+                                                    ::firework::MiddlewareHandler::Async(handler) => handler(&mut request, &mut response).await,
                                                 };
                                                 match flow {
                                                     ::firework::Flow::Stop(final_res) => {
@@ -448,10 +448,7 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
                                                         stopped = true;
                                                         break;
                                                     }
-                                                    ::firework::Flow::Next(r, s) => {
-                                                        request = r;
-                                                        response = s;
-                                                    }
+                                                    ::firework::Flow::Continue => {}
                                                 }
                                                 break;
                                             }
@@ -469,17 +466,15 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
                                         for mw in ::firework::SCOPE_MIDDLEWARES {
                                             if mw.name == stringify!(#post_mw_idents) {
                                                 let flow = match &mw.handler {
-                                                    ::firework::MiddlewareHandler::Sync(handler) => handler(request.clone(), response),
-                                                    ::firework::MiddlewareHandler::Async(handler) => handler(request.clone(), response).await,
+                                                    ::firework::MiddlewareHandler::Sync(handler) => handler(&mut request, &mut response),
+                                                    ::firework::MiddlewareHandler::Async(handler) => handler(&mut request, &mut response).await,
                                                 };
                                                 match flow {
                                                     ::firework::Flow::Stop(final_res) => {
                                                         response = final_res;
                                                         break;
                                                     }
-                                                    ::firework::Flow::Next(_, s) => {
-                                                        response = s;
-                                                    }
+                                                    ::firework::Flow::Continue => {}
                                                 }
                                                 break;
                                             }

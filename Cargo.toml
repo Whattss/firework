@@ -36,6 +36,8 @@ futures-util = "0.3"
 [dev-dependencies]
 firework-seaorm = { path = "./plugins/firework-seaorm" }
 async-trait = "0.1"
+criterion = { version = "0.5", features = ["async_tokio"] }
+reqwest = { version = "0.12", features = ["json"] }
 
 [[example]]
 name = "seaorm_example"
@@ -64,12 +66,25 @@ name = "firework-dev"
 path = "src/bin/firework-dev.rs"
 required-features = ["hot-reload"]
 
+[[bench]]
+name = "routing_bench"
+harness = false
+
+[[bench]]
+name = "request_bench"
+harness = false
+
+[[bench]]
+name = "server_bench"
+harness = false
+
 [workspace]
 members = [
     "firework-macros",
     "firework-cli",
     "plugins/firework-seaorm",
     "plugins/firework-auth",
+    "plugins/firework-proxy",
 ]
 resolver = "2"
 
@@ -80,6 +95,11 @@ license = "MIT"
 authors = ["Firework Contributors"]
 
 [profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.bench]
 opt-level = 3
 lto = true
 codegen-units = 1

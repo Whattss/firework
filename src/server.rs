@@ -363,52 +363,31 @@ async fn handle_connection(
                                         .insert("Connection".to_string(), "keep-alive".to_string());
                                 }
 
-                                // Execute middlewares (minimize cloning)
+                                // Execute middlewares (zero-cost - no cloning!)
                                 let mut stopped = false;
 
                                 // Sync middlewares
-                                for (i, mw) in middlewares.iter().enumerate() {
-                                    let is_last =
-                                        i == middlewares.len() - 1 && async_middlewares.is_empty();
-                                    let req = if is_last {
-                                        request.clone() // Still need clone for the conditional
-                                    } else {
-                                        request.clone()
-                                    };
-
-                                    match mw(req, response) {
+                                for mw in middlewares.iter() {
+                                    match mw(&mut request, &mut response) {
                                         Flow::Stop(final_res) => {
                                             response = final_res;
                                             stopped = true;
                                             break;
                                         }
-                                        Flow::Next(r, s) => {
-                                            request = r;
-                                            response = s;
-                                        }
+                                        Flow::Continue => {}
                                     }
                                 }
 
                                 // Execute async middlewares if not stopped
                                 if !stopped {
-                                    for (i, mw) in async_middlewares.iter().enumerate() {
-                                        let is_last = i == async_middlewares.len() - 1;
-                                        let req = if is_last {
-                                            request.clone()
-                                        } else {
-                                            request.clone()
-                                        };
-
-                                        match mw(req, response).await {
+                                    for mw in async_middlewares.iter() {
+                                        match mw(&mut request, &mut response).await {
                                             Flow::Stop(final_res) => {
                                                 response = final_res;
                                                 stopped = true;
                                                 break;
                                             }
-                                            Flow::Next(r, s) => {
-                                                request = r;
-                                                response = s;
-                                            }
+                                            Flow::Continue => {}
                                         }
                                     }
                                     

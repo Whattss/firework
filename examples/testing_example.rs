@@ -28,11 +28,11 @@ async fn query_test(req: Request, mut res: Response) -> Response {
 struct UserId(String);
 
 #[middleware]
-fn auth_middleware(mut req: Request, mut res: Response) -> Flow {
+fn auth_middleware(req: &mut Request, res: &mut Response) -> Flow {
     if let Some(auth) = req.headers.get("Authorization") {
         if auth.first().map(|s| s.as_str()) == Some("Bearer valid_token") {
             req.set_context(UserId("123".to_string()));
-            return Flow::Next(req, res);
+            return Flow::Continue;
         }
     }
     res.status(firework::StatusCode::Unauthorized);

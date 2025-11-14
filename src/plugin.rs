@@ -254,7 +254,7 @@ pub async fn get_plugin<T: Plugin + 'static>() -> Option<Arc<dyn Plugin>> {
     let registry = registry().read().await;
     for plugin in registry.plugins() {
         if plugin.as_any().is::<T>() {
-            return Some(plugin.clone());
+            return Some(Arc::clone(plugin));  // Arc::clone is cheap (just increments refcount)
         }
     }
     None

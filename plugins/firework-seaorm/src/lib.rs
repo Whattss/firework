@@ -170,7 +170,7 @@ pub mod helpers {
     }
     
     /// Middleware to inject database connection into request context
-    pub fn db_middleware(mut req: Request, res: Response) -> firework::Flow {
+    pub fn db_middleware(req: &mut Request, res: &mut Response) -> firework::Flow {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let registry = firework::plugin_registry();
@@ -182,7 +182,7 @@ pub mod helpers {
                     }
                 }
                 
-                firework::Flow::Next(req, res)
+                firework::Flow::Continue
             })
         })
     }
