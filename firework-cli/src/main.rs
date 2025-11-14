@@ -22,6 +22,9 @@ enum Commands {
         template: Option<String>,
     },
     
+    #[command(about = "Run in development mode with hot reload")]
+    Dev,
+    
     #[command(about = "Create configuration file")]
     Create {
         #[command(subcommand)]
@@ -68,6 +71,9 @@ fn main() {
     match cli.command {
         Commands::New { name, template } => {
             commands::new_project(&name, template.as_deref());
+        }
+        Commands::Dev => {
+            commands::run_dev(true); // Always enable hot reload for dev alias
         }
         Commands::Create { resource } => match resource {
             CreateResource::Config => {
