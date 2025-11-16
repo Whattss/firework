@@ -136,14 +136,31 @@ pub fn middleware(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn route_macro(method: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let path = parse_macro_input!(attr as LitStr).value();
+    
+    // Check if we're the innermost macro by looking if input already has the wrapper
+    let item_str = item.to_string();
+    let include_fn = !item_str.contains("__wrapper_");
+    
     let input = parse_macro_input!(item as ItemFn);
     let fn_name = &input.sig.ident;
+    
+    // Generate unique names for wrapper and static based on path to avoid collisions
+    // Hash the path to create a unique identifier
+    let path_hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        path.hash(&mut hasher);
+        method.hash(&mut hasher);
+        hasher.finish()
+    };
+    
     let wrapper_name = syn::Ident::new(
-        &format!("__wrapper_{}", fn_name.to_string()),
+        &format!("__wrapper_{}_{:x}", fn_name.to_string(), path_hash),
         fn_name.span()
     );
     let static_name = syn::Ident::new(
-        &format!("__ROUTE_{}_{}", method, fn_name.to_string().to_uppercase()),
+        &format!("__ROUTE_{}_{}_{:X}", method, fn_name.to_string().to_uppercase(), path_hash),
         fn_name.span()
     );
     
@@ -214,8 +231,15 @@ fn route_macro(method: &str, attr: TokenStream, item: TokenStream) -> TokenStrea
         }
     };
     
+    // Only include the original function on the first application
+    let fn_output = if include_fn {
+        quote! { #input }
+    } else {
+        quote! {}
+    };
+    
     let output = quote! {
-        #input
+        #fn_output
         
         #wrapper_impl
         
