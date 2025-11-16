@@ -321,8 +321,8 @@ where
     <<M::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType: FromStr + Send + Sync,
 {
     async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        // Get database connection
-        let db = req.get_context::<DatabaseConnection>()
+        // Get database connection (returns Arc<DatabaseConnection>)
+        let db_arc = req.get_context::<DatabaseConnection>()
             .ok_or_else(|| firework::Error::Internal(
                 "No database connection available. Did you add db_middleware_async?".into()
             ))?;
@@ -371,9 +371,9 @@ where
                     format!("Invalid {} format for parameter '{}'", entity_name, param_name)
                 ))?;
         
-        // Query database
+        // Query database (keep db_arc alive for the whole await)
         let entity = M::Entity::find_by_id(pk)
-            .one(&*db)
+            .one(&*db_arc)  // Dereference Arc to get &DatabaseConnection
             .await
             .map_err(|e| firework::Error::Internal(
                 format!("Database error while fetching {}: {}", entity_name, e)
@@ -381,6 +381,9 @@ where
             .ok_or_else(|| firework::Error::NotFound(
                 format!("{} not found", entity_name)
             ))?;
+        
+        // TODO: Store entity in request context for other extractors to reuse
+        // req.set_context(entity.clone()); // Requires M: 'static
         
         Ok(DbEntity(entity))
     }
@@ -593,3 +596,96 @@ where
 
 // For this one we need a custom FromRequest that takes param name from somewhere
 // Since we can't pass it at compile time easily, let's make a simpler macro-based approach
+
+/// Fetch all entities of a given type
+/// 
+/// # Example
+/// ```ignore
+/// #[get("/api/tweets")]
+/// async fn get_all_tweets(
+///     DbAll(tweets): DbAll<tweets::Entity>
+/// ) -> Json<Vec<tweets::Model>> {
+///     Json(tweets)
+/// }
+/// ```
+/// 
+/// # With ordering
+/// ```ignore
+/// #[get("/api/tweets")]
+/// async fn get_all_tweets(
+///     DbConn(db): DbConn,
+/// ) -> firework::Result<Json<Vec<tweets::Model>>> {
+///     use sea_orm::QueryOrder;
+///     let tweets = tweets::Entity::find()
+///         .order_by_desc(tweets::Column::Id)
+///         .all(&db)
+///         .await
+///         .map_db_err()?;
+///     Ok(Json(tweets))
+/// }
+/// ```
+pub struct DbAll<E>(pub Vec<<E as EntityTrait>::Model>)
+where
+    E: EntityTrait;
+
+impl<E> std::ops::Deref for DbAll<E>
+where
+    E: EntityTrait,
+{
+    type Target = Vec<<E as EntityTrait>::Model>;
+    
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<E> std::ops::DerefMut for DbAll<E>
+where
+    E: EntityTrait,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[async_trait::async_trait]
+impl<E> firework::FromRequest for DbAll<E>
+where
+    E: EntityTrait,
+    <E as EntityTrait>::Model: Send + Sync + sea_orm::FromQueryResult,
+{
+    async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
+        let db = req.get_context::<DatabaseConnection>()
+            .ok_or_else(|| firework::Error::Internal(
+                "No database connection available. Did you add db_middleware_async?".into()
+            ))?;
+        
+        let entities = E::find()
+            .all(&*db)
+            .await
+            .map_db_err()?;
+        
+        Ok(DbAll(entities))
+    }
+}
+
+/// Convenience function to use as async middleware
+/// 
+/// # Example
+/// ```ignore
+/// routes!()
+///     .async_middleware(firework_seaorm::db_middleware_async)
+///     .listen("127.0.0.1:8080")
+///     .await;
+/// ```
+pub async fn db_middleware_async(req: &mut Request, _res: &mut Response) -> firework::Flow {
+    let registry = firework::plugin_registry().read().await;
+    
+    if let Some(plugin) = registry.get::<SeaOrmPlugin>() {
+        if let Some(db) = plugin.db().await {
+            req.set_context(db);
+        }
+    }
+    
+    firework::Flow::Continue
+}
