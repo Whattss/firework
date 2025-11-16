@@ -238,6 +238,17 @@ pub mod macros {
 // Re-export SeaORM for convenience
 pub use sea_orm;
 
+/// Helper trait to convert SeaORM errors to Firework errors
+pub trait DbErrExt<T> {
+    fn map_db_err(self) -> firework::Result<T>;
+}
+
+impl<T> DbErrExt<T> for Result<T, sea_orm::DbErr> {
+    fn map_db_err(self) -> firework::Result<T> {
+        self.map_err(|e| firework::Error::Internal(format!("Database error: {}", e)))
+    }
+}
+
 /// Database entity extractor - automatically fetches entities from database
 /// 
 /// # Basic Usage
