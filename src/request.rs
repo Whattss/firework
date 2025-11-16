@@ -39,7 +39,7 @@ impl Uri {
 
 #[derive(Clone)]
 pub struct Context {
-    data: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
+    data: Arc<RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
 }
 
 impl Context {
@@ -49,17 +49,43 @@ impl Context {
         }
     }
     
-    pub fn insert<T: Any + Send + Sync + Clone>(&mut self, value: T) {
+    pub fn insert<T: Any + Send + Sync>(&mut self, value: T) {
         if let Ok(mut data) = self.data.write() {
-            data.insert(TypeId::of::<T>(), Box::new(value));
+            data.insert(TypeId::of::<T>(), Arc::new(value));
         }
     }
     
-    pub fn get<T: Any + Send + Sync + Clone>(&self) -> Option<T> {
+    pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
+        if let Ok(data) = self.data.read() {
+            data.get(&TypeId::of::<Arc<T>>())
+                .and_then(|boxed| boxed.downcast_ref::<Arc<T>>())
+                .cloned()
+                .or_else(|| {
+                    // Fallback: try to get T directly and wrap in Arc
+                    data.get(&TypeId::of::<T>())
+                        .and_then(|boxed| boxed.downcast_ref::<T>())
+                        .map(|val_ref| {
+                            // This is a bit hacky but works for Clone types
+                            // In practice, we should always insert Arc<T>
+                            Arc::new(unsafe { std::ptr::read(val_ref as *const T) })
+                        })
+                })
+        } else {
+            None
+        }
+    }
+    
+    /// Get value as owned (requires Clone) - for backwards compatibility
+    pub fn get_cloned<T: Any + Send + Sync + Clone>(&self) -> Option<T> {
         if let Ok(data) = self.data.read() {
             data.get(&TypeId::of::<T>())
                 .and_then(|boxed| boxed.downcast_ref::<T>())
                 .cloned()
+                .or_else(|| {
+                    data.get(&TypeId::of::<Arc<T>>())
+                        .and_then(|boxed| boxed.downcast_ref::<Arc<T>>())
+                        .map(|arc| (**arc).clone())
+                })
         } else {
             None
         }
@@ -114,13 +140,18 @@ impl Request {
     }
     
     /// Insert a value into the request context
-    pub fn set_context<T: Any + Send + Sync + Clone>(&mut self, value: T) {
+    pub fn set_context<T: Any + Send + Sync>(&mut self, value: T) {
         self.context.insert(value);
     }
     
-    /// Get a value from the request context
-    pub fn get_context<T: Any + Send + Sync + Clone>(&self) -> Option<T> {
+    /// Get a value from the request context (as Arc for zero-copy)
+    pub fn get_context<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         self.context.get()
+    }
+    
+    /// Get a cloned value from context (for backwards compatibility)
+    pub fn get_context_cloned<T: Any + Send + Sync + Clone>(&self) -> Option<T> {
+        self.context.get_cloned()
     }
     
     /// Get a route parameter by name

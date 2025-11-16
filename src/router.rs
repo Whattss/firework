@@ -66,9 +66,9 @@ impl RadixNode {
 
     pub fn search(&self, method: &Method, path: &str) -> Option<(HandlerBox, HashMap<String, String>)> {
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let method_str = method_to_string(method);
+        let method_str = method_to_str(method);
         let mut params = HashMap::new();
-        self.search_iterative(&method_str, &parts, &mut params)
+        self.search_iterative(method_str, &parts, &mut params)
     }
     
     fn search_iterative(&self, method: &str, parts: &[&str], params: &mut HashMap<String, String>) -> Option<(HandlerBox, HashMap<String, String>)> {
@@ -112,16 +112,16 @@ impl RadixNode {
 }
 
 #[inline]
-fn method_to_string(method: &Method) -> String {
+fn method_to_str(method: &Method) -> &'static str {
     match method {
-        Method::GET => "GET".to_string(),
-        Method::POST => "POST".to_string(),
-        Method::PUT => "PUT".to_string(),
-        Method::DELETE => "DELETE".to_string(),
-        Method::HEAD => "HEAD".to_string(),
-        Method::OPTIONS => "OPTIONS".to_string(),
-        Method::PATCH => "PATCH".to_string(),
-        Method::Unknown(s) => s.to_uppercase(),
+        Method::GET => "GET",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::DELETE => "DELETE",
+        Method::HEAD => "HEAD",
+        Method::OPTIONS => "OPTIONS",
+        Method::PATCH => "PATCH",
+        Method::Unknown(_) => "UNKNOWN",
     }
 }
 

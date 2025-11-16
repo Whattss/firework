@@ -10,11 +10,12 @@
 //! - SSR support (future)
 //! - TypeScript API generation (future)
 
-use firework::{Flow, Method, Plugin, PluginError, PluginMetadata, PluginResult, Request, Response, Result, StatusCode, Error};
+use firework::{Flow, Plugin, PluginError, PluginMetadata, PluginResult, Request, Response, Result, StatusCode, Error};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
+use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 
 /// Vite plugin configuration
@@ -52,6 +53,7 @@ pub struct VitePlugin {
     config: ViteConfig,
     vite_process: Arc<RwLock<Option<Child>>>,
     is_production: bool,
+    http_client: Arc<reqwest::Client>,
 }
 
 impl VitePlugin {
@@ -61,6 +63,12 @@ impl VitePlugin {
             config: ViteConfig::default(),
             vite_process: Arc::new(RwLock::new(None)),
             is_production: false,
+            http_client: Arc::new(
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_else(|_| reqwest::Client::new())
+            ),
         }
     }
 
@@ -70,6 +78,12 @@ impl VitePlugin {
             config,
             vite_process: Arc::new(RwLock::new(None)),
             is_production: false,
+            http_client: Arc::new(
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_else(|_| reqwest::Client::new())
+            ),
         }
     }
 
@@ -100,7 +114,8 @@ impl VitePlugin {
         let check = Command::new("npm")
             .args(&["list", "vite"])
             .current_dir(&root)
-            .output();
+            .output()
+            .await;
 
         if check.is_err() {
             eprintln!("[Vite] Warning: Vite not found. Installing dependencies...");
@@ -110,17 +125,41 @@ impl VitePlugin {
                 .spawn()
                 .map_err(|e| Error::Internal(format!("Failed to install dependencies: {}", e)))?
                 .wait()
+                .await
                 .map_err(|e| Error::Internal(format!("npm install failed: {}", e)))?;
         }
 
-        // Start Vite dev server
-        let child = Command::new("npm")
+        // Start Vite dev server with piped output to avoid cluttering Firework logs
+        let mut child = Command::new("npm")
             .args(&["run", "dev", "--", "--port", &port.to_string(), "--host", "0.0.0.0"])
             .current_dir(&root)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| Error::Internal(format!("Failed to start Vite: {}", e)))?;
+
+        // Spawn tasks to prefix and print Vite output
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    println!("[Vite] {}", line);
+                }
+            });
+        }
+
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    eprintln!("[Vite] {}", line);
+                }
+            });
+        }
 
         *self.vite_process.write().await = Some(child);
 
@@ -138,6 +177,7 @@ impl VitePlugin {
             .args(&["run", "build"])
             .current_dir(&self.config.root)
             .output()
+            .await
             .map_err(|e| Error::Internal(format!("Build failed: {}", e)))?;
 
         if !output.status.success() {
@@ -237,7 +277,7 @@ impl Plugin for VitePlugin {
 /// Vite middleware - proxies requests to Vite dev server in development
 pub async fn vite_middleware(
     req: &mut Request,
-    res: &mut Response,
+    _res: &mut Response,
     vite: &VitePlugin,
 ) -> Flow {
     // In production, let static file middleware handle it
@@ -250,10 +290,46 @@ pub async fn vite_middleware(
         return Flow::Continue;
     }
 
-    // Proxy to Vite dev server
-    let vite_url = format!("{}{}", vite.dev_url(), req.uri.path);
+    // Build full URL with query string
+    let query_string = if let Some(query) = &req.uri.query {
+        let params: Vec<String> = query
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+        if !params.is_empty() {
+            format!("?{}", params.join("&"))
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    
+    let vite_url = format!("{}{}{}", vite.dev_url(), req.uri.path, query_string);
 
-    match reqwest::get(&vite_url).await {
+    // Use cached HTTP client (no need to create on every request!)
+    let client = &vite.http_client;
+    
+    // Build request with proper method and headers
+    let mut proxy_req = match req.method {
+        firework::Method::GET => client.get(&vite_url),
+        firework::Method::POST => client.post(&vite_url).body(req.body.clone()),
+        firework::Method::PUT => client.put(&vite_url).body(req.body.clone()),
+        firework::Method::DELETE => client.delete(&vite_url),
+        firework::Method::PATCH => client.patch(&vite_url).body(req.body.clone()),
+        _ => client.get(&vite_url),
+    };
+    
+    // Forward important headers
+    for (key, values) in &req.headers {
+        if !key.to_lowercase().starts_with("host") {
+            if let Some(first_value) = values.first() {
+                proxy_req = proxy_req.header(key, first_value);
+            }
+        }
+    }
+
+    match proxy_req.send().await {
         Ok(response) => {
             let status_code = response.status().as_u16();
             let headers = response.headers().clone();
@@ -281,8 +357,8 @@ pub async fn vite_middleware(
             }
         }
         Err(_) => {
-            // Vite dev server not ready yet
-            Flow::Continue
+            // Vite dev server not ready yet, serve index.html as fallback
+            serve_vite_assets(req, _res, vite).await
         }
     }
 }
@@ -290,7 +366,7 @@ pub async fn vite_middleware(
 /// Helper to serve Vite assets in production
 pub async fn serve_vite_assets(
     req: &mut Request,
-    res: &mut Response,
+    _res: &mut Response,
     vite: &VitePlugin,
 ) -> Flow {
     if !vite.is_production() {

@@ -10,31 +10,66 @@ use crate::{
     Version,
 };
 
-// Buffer pool para reutilizar buffers
-use lazy_static::lazy_static;
-use std::sync::Mutex;
+// Thread-local buffer pool for zero contention
+use std::cell::RefCell;
 
 const BUFFER_SIZE: usize = 8192;
-const MAX_POOLED_BUFFERS: usize = 1024;
+const MAX_POOLED_BUFFERS_PER_THREAD: usize = 32;
 
-lazy_static! {
-    static ref BUFFER_POOL: Mutex<Vec<BytesMut>> =
-        Mutex::new(Vec::with_capacity(MAX_POOLED_BUFFERS));
+thread_local! {
+    static BUFFER_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(MAX_POOLED_BUFFERS_PER_THREAD));
 }
 
 fn get_buffer() -> BytesMut {
-    BUFFER_POOL
-        .lock()
-        .unwrap()
-        .pop()
-        .unwrap_or_else(|| BytesMut::with_capacity(BUFFER_SIZE))
+    BUFFER_POOL.with(|pool| {
+        pool.borrow_mut()
+            .pop()
+            .unwrap_or_else(|| BytesMut::with_capacity(BUFFER_SIZE))
+    })
 }
 
 fn return_buffer(mut buf: BytesMut) {
     buf.clear();
-    if let Ok(mut pool) = BUFFER_POOL.lock() {
-        if pool.len() < MAX_POOLED_BUFFERS {
+    BUFFER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        if pool.len() < MAX_POOLED_BUFFERS_PER_THREAD {
             pool.push(buf);
+        }
+    });
+}
+
+async fn check_port_availability(addr: &str) {
+    let port = addr.split(':').last().unwrap_or("8080");
+    
+    #[cfg(unix)]
+    {
+        let output = tokio::process::Command::new("lsof")
+            .arg("-i")
+            .arg(format!(":{}", port))
+            .arg("-P")
+            .arg("-n")
+            .output()
+            .await;
+
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let lines: Vec<&str> = stdout.lines().collect();
+            
+            if lines.len() > 1 {
+                println!("\n⚠️  [WARNING] Port {} is already in use by other process(es):", port);
+                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                for line in &lines {
+                    println!("{}", line);
+                }
+                println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                println!("\n🔴 Due to SO_REUSEPORT being enabled, the server will bind successfully");
+                println!("   but traffic may be distributed between multiple processes!");
+                println!("\n💡 To fix this, kill the existing process(es) using:");
+                println!("   kill -9 <PID>  (replace <PID> with the process ID from above)\n");
+                
+                // Give user time to read the warning
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
         }
     }
 }
@@ -179,6 +214,9 @@ impl Server {
             registry.start_all().await?;
         }
 
+        // Check if port is already in use
+        check_port_availability(addr).await;
+
         // Create listener with SO_REUSEPORT and SO_REUSEADDR for better performance
         use socket2::{Domain, Protocol, Socket, Type};
         use std::net::SocketAddr;
@@ -227,14 +265,8 @@ impl Server {
             tokio::spawn(async move {
                 let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr, ws_routes).await;
                 
-                // Flush stdout/stderr to ensure logs from handlers are visible immediately
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                let _ = std::io::stderr().flush();
-                
                 if let Err(e) = result {
                     eprintln!("[ERROR] Connection handler error: {}", e);
-                    let _ = std::io::stderr().flush();
                 }
             });
         }
@@ -390,11 +422,6 @@ async fn handle_connection(
                                             Flow::Continue => {}
                                         }
                                     }
-                                    
-                                    // Flush after middlewares to show their logs
-                                    use std::io::Write;
-                                    let _ = std::io::stdout().flush();
-                                    let _ = std::io::stderr().flush();
                                 }
 
                                 // Route and execute handler if not stopped
@@ -424,12 +451,6 @@ async fn handle_connection(
                                     {
                                         request.params = params;
                                         response = handler.call(request, response).await;
-                                        
-                                        // Flush stdout/stderr immediately after handler execution
-                                        // This ensures println!/eprintln! in handlers are visible
-                                        use std::io::Write;
-                                        let _ = std::io::stdout().flush();
-                                        let _ = std::io::stderr().flush();
                                     } else {
                                         response = Response::new(
                                             crate::response::StatusCode::NotFound,

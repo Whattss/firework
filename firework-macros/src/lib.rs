@@ -54,7 +54,7 @@ fn websocket_macro(attr: TokenStream, item: TokenStream) -> TokenStream {
             ::std::boxed::Box::pin(#fn_name(ws))
         }
         
-        #[::firework::linkme::distributed_slice(::firework::WS_ROUTES)]
+        #[::firework::__private::linkme::distributed_slice(::firework::WS_ROUTES)]
         static #static_name: ::firework::WsRouteInfo = ::firework::WsRouteInfo {
             path: #path,
             handler: #wrapper_name,
@@ -122,7 +122,7 @@ pub fn middleware(attr: TokenStream, item: TokenStream) -> TokenStream {
         
         #sync_wrapper
         
-        #[::firework::linkme::distributed_slice(::firework::SCOPE_MIDDLEWARES)]
+        #[::firework::__private::linkme::distributed_slice(::firework::SCOPE_MIDDLEWARES)]
         #[allow(non_upper_case_globals)]
         static #static_mw_name: ::firework::ScopeMiddleware = ::firework::ScopeMiddleware {
             name: stringify!(#fn_name),
@@ -219,7 +219,7 @@ fn route_macro(method: &str, attr: TokenStream, item: TokenStream) -> TokenStrea
         
         #wrapper_impl
         
-        #[::firework::linkme::distributed_slice(::firework::ROUTES)]
+        #[::firework::__private::linkme::distributed_slice(::firework::ROUTES)]
         static #static_name: ::firework::RouteInfo = ::firework::RouteInfo {
             method: #method,
             path: #path,
@@ -493,7 +493,7 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
                         
                         #wrapper_impl
                         
-                        #[::firework::linkme::distributed_slice(::firework::ROUTES)]
+                        #[::firework::__private::linkme::distributed_slice(::firework::ROUTES)]
                         static #static_name: ::firework::RouteInfo = ::firework::RouteInfo {
                             method: #method_upper,
                             path: #full_path,
@@ -601,7 +601,7 @@ pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
         
         quote! {
             // Create a distributed slice entry for this plugin factory
-            #[::firework::linkme::distributed_slice(::firework::PLUGIN_FACTORIES)]
+            #[::firework::__private::linkme::distributed_slice(::firework::PLUGIN_FACTORIES)]
             #[allow(non_upper_case_globals)]
             static #init_fn_name: ::firework::PluginFactory = ::firework::PluginFactory {
                 name: stringify!(#struct_name),

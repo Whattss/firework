@@ -10,7 +10,7 @@ A blazingly fast, declarative web framework for Rust with hot-reload, WebSockets
 cargo install --path firework-cli
 fwk new my-app
 cd my-app
-cargo run
+fwk dev
 ```
 
 ## Example

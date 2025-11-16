@@ -1,0 +1,11 @@
+{
+  "name": "threads-clone-frontend",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173 --host 0.0.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}

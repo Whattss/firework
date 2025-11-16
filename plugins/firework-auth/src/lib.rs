@@ -258,9 +258,9 @@ pub struct Auth(pub Claims);
 #[async_trait::async_trait]
 impl firework::FromRequest for Auth {
     async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        // Try to get from context first (set by middleware)
-        if let Some(claims) = req.get_context::<Claims>() {
-            return Ok(Auth(claims));
+        // Try to get from context first (set by middleware) - now returns Arc
+        if let Some(claims_arc) = req.get_context::<Claims>() {
+            return Ok(Auth((*claims_arc).clone()));
         }
 
         // Extract from Authorization header
@@ -286,9 +286,9 @@ pub struct OptionalAuth(pub Option<Claims>);
 #[async_trait::async_trait]
 impl firework::FromRequest for OptionalAuth {
     async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        // Try context first
-        if let Some(claims) = req.get_context::<Claims>() {
-            return Ok(OptionalAuth(Some(claims)));
+        // Try context first (now returns Arc)
+        if let Some(claims_arc) = req.get_context::<Claims>() {
+            return Ok(OptionalAuth(Some((*claims_arc).clone())));
         }
 
         // Try to extract token
@@ -327,11 +327,11 @@ pub trait RequestAuthExt {
 
 impl RequestAuthExt for Request {
     fn claims(&self) -> Option<Claims> {
-        self.get_context::<Claims>()
+        self.get_context::<Claims>().map(|arc| (*arc).clone())
     }
 
     fn user_id(&self) -> Option<String> {
-        self.get_context::<Claims>().map(|c| c.sub.clone())
+        self.get_context::<Claims>().map(|arc| arc.sub.clone())
     }
 }
 
@@ -362,8 +362,77 @@ pub mod helpers {
     use super::*;
     use firework::Response;
 
-    /// Middleware to require authentication
-    pub fn require_auth(req: &mut Request, res: &mut Response) -> Flow {
+    /// Async middleware to require authentication
+    /// 
+    /// NOTE: This is an ASYNC middleware. Use it like:
+    /// ```
+    /// server.async_middleware(require_auth_async)
+    /// ```
+    /// 
+    /// Or better yet, just use the Auth extractor in your handlers:
+    /// ```
+    /// #[get("/protected")]
+    /// async fn handler(Auth(claims): Auth) { ... }
+    /// ```
+    pub async fn require_auth_async(req: &mut Request, _res: &mut Response) -> Flow {
+        let token = match extract_token_from_header(&req) {
+            Some(t) => t,
+            None => {
+                return Flow::Stop(
+                    firework::json!(serde_json::json!({
+                        "error": "No authorization token provided",
+                        "status": 401
+                    }))
+                );
+            }
+        };
+
+        // Verify token and set context (fully async - no blocking!)
+        let registry = firework::plugin_registry().read().await;
+        
+        let claims = if let Some(plugin) = registry.get::<AuthPlugin>() {
+            plugin.verify_token(&token).await.ok()
+        } else {
+            None
+        };
+
+        match claims {
+            Some(c) => {
+                req.set_context(c);
+                Flow::Continue
+            }
+            None => Flow::Stop(
+                firework::json!(serde_json::json!({
+                    "error": "Invalid or expired token",
+                    "status": 401
+                }))
+            ),
+        }
+    }
+
+    /// Async middleware for optional authentication (doesn't fail if no token)
+    pub async fn optional_auth_async(req: &mut Request, _res: &mut Response) -> Flow {
+        if let Some(token) = extract_token_from_header(&req) {
+            let registry = firework::plugin_registry().read().await;
+            
+            let claims = if let Some(plugin) = registry.get::<AuthPlugin>() {
+                plugin.verify_token(&token).await.ok()
+            } else {
+                None
+            };
+
+            if let Some(c) = claims {
+                req.set_context(c);
+            }
+        }
+        
+        Flow::Continue
+    }
+
+    /// DEPRECATED: Sync middleware (blocks threads - don't use!)
+    /// Use require_auth_async instead or just use Auth extractor in handlers
+    #[deprecated(note = "Use require_auth_async or Auth extractor instead - this blocks threads")]
+    pub fn require_auth(req: &mut Request, _res: &mut Response) -> Flow {
         let token = match extract_token_from_header(&req) {
             Some(t) => t,
             None => {
@@ -404,8 +473,10 @@ pub mod helpers {
         }
     }
 
-    /// Middleware for optional authentication (doesn't fail if no token)
-    pub fn optional_auth(req: &mut Request, res: &mut Response) -> Flow {
+    /// DEPRECATED: Sync middleware (blocks threads - don't use!)
+    /// Use optional_auth_async instead or OptionalAuth extractor
+    #[deprecated(note = "Use optional_auth_async or OptionalAuth extractor instead - this blocks threads")]
+    pub fn optional_auth(req: &mut Request, _res: &mut Response) -> Flow {
         if let Some(token) = extract_token_from_header(&req) {
             let claims = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
@@ -498,4 +569,8 @@ pub mod macros {
 }
 
 // Re-export for convenience
-pub use helpers::{require_auth, optional_auth, auth_error_to_response};
+pub use helpers::{require_auth_async, optional_auth_async, auth_error_to_response};
+
+// Keep deprecated sync versions for backwards compatibility
+#[allow(deprecated)]
+pub use helpers::{require_auth, optional_auth};

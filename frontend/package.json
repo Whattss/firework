@@ -1,0 +1,11 @@
+{
+  "name": "vite-test-frontend",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173 --host 0.0.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}

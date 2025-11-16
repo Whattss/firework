@@ -184,27 +184,95 @@ fn generate_accept_key(key: &str) -> String {
 }
 
 
-/// WebSocket room for managing multiple connections
+/// WebSocket room for managing multiple connections (channel-based for better performance)
 pub struct WebSocketRoom {
-    connections: std::sync::Arc<tokio::sync::RwLock<Vec<std::sync::Arc<tokio::sync::Mutex<WebSocket>>>>>,
+    broadcast_tx: tokio::sync::broadcast::Sender<Message>,
+    connection_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl WebSocketRoom {
     /// Create a new WebSocket room
+    pub fn new() -> Self {
+        let (tx, _rx) = tokio::sync::broadcast::channel(100);
+        Self {
+            broadcast_tx: tx,
+            connection_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Create with custom channel capacity
+    pub fn with_capacity(capacity: usize) -> Self {
+        let (tx, _rx) = tokio::sync::broadcast::channel(capacity);
+        Self {
+            broadcast_tx: tx,
+            connection_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Subscribe to room broadcasts - returns a receiver for this connection
+    /// 
+    /// Use this in a loop to receive broadcasts:
+    /// ```ignore
+    /// let mut rx = room.subscribe();
+    /// while let Ok(msg) = rx.recv().await {
+    ///     ws.send(msg).await.ok();
+    /// }
+    /// ```
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Message> {
+        self.connection_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.broadcast_tx.subscribe()
+    }
+
+    /// Unsubscribe (call when connection closes)
+    pub fn unsubscribe(&self) {
+        self.connection_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Broadcast a message to all connections in the room (non-blocking!)
+    /// 
+    /// Returns the number of receivers the message was sent to
+    pub fn broadcast(&self, msg: Message) -> usize {
+        self.broadcast_tx.send(msg).unwrap_or(0)
+    }
+
+    /// Get the number of active connections
+    pub fn len(&self) -> usize {
+        self.connection_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Check if the room is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl Default for WebSocketRoom {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Legacy WebSocketRoom with mutex-based connections (deprecated)
+/// Use the new channel-based WebSocketRoom instead for better performance
+#[deprecated(note = "Use the new channel-based WebSocketRoom instead")]
+pub struct LegacyWebSocketRoom {
+    connections: std::sync::Arc<tokio::sync::RwLock<Vec<std::sync::Arc<tokio::sync::Mutex<WebSocket>>>>>,
+}
+
+#[allow(deprecated)]
+impl LegacyWebSocketRoom {
     pub fn new() -> Self {
         Self {
             connections: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         }
     }
 
-    /// Add a connection to the room
     pub async fn add(&self, ws: WebSocket) -> std::sync::Arc<tokio::sync::Mutex<WebSocket>> {
         let ws = std::sync::Arc::new(tokio::sync::Mutex::new(ws));
         self.connections.write().await.push(ws.clone());
         ws
     }
 
-    /// Remove a connection from the room
     pub async fn remove(&self, ws: &std::sync::Arc<tokio::sync::Mutex<WebSocket>>) {
         let mut conns = self.connections.write().await;
         if let Some(pos) = conns.iter().position(|c| std::sync::Arc::ptr_eq(c, ws)) {
@@ -212,7 +280,6 @@ impl WebSocketRoom {
         }
     }
 
-    /// Broadcast a message to all connections in the room
     pub async fn broadcast(&self, msg: Message) {
         let conns = self.connections.read().await;
         for conn in conns.iter() {
@@ -222,18 +289,17 @@ impl WebSocketRoom {
         }
     }
 
-    /// Get the number of connections
     pub async fn len(&self) -> usize {
         self.connections.read().await.len()
     }
 
-    /// Check if the room is empty
     pub async fn is_empty(&self) -> bool {
         self.connections.read().await.is_empty()
     }
 }
 
-impl Default for WebSocketRoom {
+#[allow(deprecated)]
+impl Default for LegacyWebSocketRoom {
     fn default() -> Self {
         Self::new()
     }
@@ -252,10 +318,20 @@ mod tests {
         assert!(matches!(binary_msg, Message::Binary(_)));
     }
 
-    #[tokio::test]
-    async fn test_websocket_room() {
+    #[test]
+    fn test_websocket_room() {
         let room = WebSocketRoom::new();
-        assert_eq!(room.len().await, 0);
-        assert!(room.is_empty().await);
+        assert_eq!(room.len(), 0);
+        assert!(room.is_empty());
+        
+        // Test subscribe
+        let _rx1 = room.subscribe();
+        assert_eq!(room.len(), 1);
+        
+        let _rx2 = room.subscribe();
+        assert_eq!(room.len(), 2);
+        
+        room.unsubscribe();
+        assert_eq!(room.len(), 1);
     }
 }

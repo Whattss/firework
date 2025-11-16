@@ -86,9 +86,9 @@ members = [
     "plugins/firework-auth",
     "plugins/firework-proxy",
     "plugins/firework-vite",
-]
-exclude = [
-    "examples/twitter-clone/backend",
+    "plugins/firework-dataloader",
+    "undergun",
+    "examples/threads-clone/backend", "examples/todo-app",
 ]
 resolver = "2"
 

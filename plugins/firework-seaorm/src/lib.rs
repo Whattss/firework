@@ -98,26 +98,20 @@ pub struct DbConn(pub DatabaseConnection);
 #[async_trait::async_trait]
 impl firework::FromRequest for DbConn {
     async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        // Try to get from context first
-        if let Some(db) = req.get_context::<DatabaseConnection>() {
-            return Ok(DbConn(db));
+        // Try to get from context first (as Arc now)
+        if let Some(db_arc) = req.get_context::<DatabaseConnection>() {
+            return Ok(DbConn((*db_arc).clone()));
         }
         
-        // Otherwise get from plugin
-        let db = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let registry = firework::plugin_registry();
-                let registry = registry.read().await;
-                if let Some(plugin) = registry.get::<SeaOrmPlugin>() {
-                    plugin.db().await
-                } else {
-                    None
-                }
-            })
-        });
+        // Otherwise get from plugin (fully async - no blocking!)
+        let registry = firework::plugin_registry().read().await;
+        let plugin = registry.get::<SeaOrmPlugin>()
+            .ok_or_else(|| firework::Error::Internal("SeaORM plugin not registered".into()))?;
         
-        db.map(DbConn)
-            .ok_or_else(|| firework::Error::Internal("No database connection available".into()))
+        let db = plugin.db().await
+            .ok_or_else(|| firework::Error::Internal("No database connection available".into()))?;
+        
+        Ok(DbConn(db))
     }
 }
 
@@ -128,23 +122,8 @@ pub trait RequestDbExt {
 
 impl RequestDbExt for Request {
     fn db(&self) -> Option<DatabaseConnection> {
-        // Try to get from context first
-        if let Some(db) = self.get_context::<DatabaseConnection>() {
-            return Some(db);
-        }
-        
-        // Otherwise get from plugin
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let registry = firework::plugin_registry();
-                let registry = registry.read().await;
-                if let Some(plugin) = registry.get::<SeaOrmPlugin>() {
-                    plugin.db().await
-                } else {
-                    None
-                }
-            })
-        })
+        // Get from context as Arc and clone
+        self.get_context::<DatabaseConnection>().map(|arc| (*arc).clone())
     }
 }
 
@@ -169,8 +148,23 @@ pub mod helpers {
         }
     }
     
-    /// Middleware to inject database connection into request context
-    pub fn db_middleware(req: &mut Request, res: &mut Response) -> firework::Flow {
+    /// Middleware to inject database connection into request context (async version)
+    pub async fn db_middleware_async(req: &mut Request, _res: &mut Response) -> firework::Flow {
+        let registry = firework::plugin_registry().read().await;
+        
+        if let Some(plugin) = registry.get::<SeaOrmPlugin>() {
+            if let Some(db) = plugin.db().await {
+                req.set_context(db);
+            }
+        }
+        
+        firework::Flow::Continue
+    }
+    
+    /// DEPRECATED: Middleware to inject database connection (blocks - don't use!)
+    /// Use db_middleware_async instead
+    #[deprecated(note = "Use db_middleware_async instead - this blocks threads")]
+    pub fn db_middleware(req: &mut Request, _res: &mut Response) -> firework::Flow {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let registry = firework::plugin_registry();

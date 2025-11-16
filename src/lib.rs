@@ -130,6 +130,7 @@ pub use linkme;
 #[doc(hidden)]
 pub mod __private {
     pub use linkme;
+    pub use linkme::distributed_slice;
 }
 
 pub mod prelude {
