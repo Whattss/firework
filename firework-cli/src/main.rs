@@ -25,6 +25,15 @@ enum Commands {
     #[command(about = "Run in development mode with hot reload")]
     Dev,
     
+    #[command(about = "List all registered routes")]
+    Routes {
+        #[arg(short, long, help = "Show only routes matching pattern")]
+        filter: Option<String>,
+        
+        #[arg(short, long, help = "Show detailed route information")]
+        verbose: bool,
+    },
+    
     #[command(about = "Create configuration file")]
     Create {
         #[command(subcommand)]
@@ -74,6 +83,9 @@ fn main() {
         }
         Commands::Dev => {
             commands::run_dev(true); // Always enable hot reload for dev alias
+        }
+        Commands::Routes { filter, verbose } => {
+            commands::list_routes(filter.as_deref(), verbose);
         }
         Commands::Create { resource } => match resource {
             CreateResource::Config => {

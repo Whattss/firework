@@ -278,3 +278,174 @@ fn create_fullstack_template(name: &str) {
     
     fs::write(format!("{}/static/index.html", name), index_html).expect("Failed to write index.html");
 }
+
+pub fn list_routes(filter: Option<&str>, verbose: bool) {
+    use std::collections::HashMap;
+    
+    println!("{} Scanning for routes...\n", "🔍".bright_yellow());
+    
+    // Parse src directory for route macros
+    let routes = scan_routes_in_directory("src");
+    
+    if routes.is_empty() {
+        println!("{} No routes found", "⚠".bright_yellow());
+        println!("\n  Make sure you're using #[get], #[post], etc. macros from firework");
+        return;
+    }
+    
+    // Group by method
+    let mut grouped: HashMap<String, Vec<RouteInfo>> = HashMap::new();
+    for route in routes {
+        if let Some(filter_str) = filter {
+            if !route.path.contains(filter_str) && !route.handler.contains(filter_str) {
+                continue;
+            }
+        }
+        
+        grouped.entry(route.method.clone())
+            .or_insert_with(Vec::new)
+            .push(route);
+    }
+    
+    if grouped.is_empty() {
+        println!("{} No routes match filter '{}'", "⚠".bright_yellow(), filter.unwrap());
+        return;
+    }
+    
+    // Sort methods
+    let mut methods: Vec<_> = grouped.keys().cloned().collect();
+    methods.sort_by(|a, b| {
+        let order = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"];
+        let a_pos = order.iter().position(|&m| m == a).unwrap_or(99);
+        let b_pos = order.iter().position(|&m| m == b).unwrap_or(99);
+        a_pos.cmp(&b_pos)
+    });
+    
+    if !verbose {
+        println!("  {}", "────────────────────────────────────────────────────────────────".dimmed());
+    }
+    
+    // Print routes
+    let mut total = 0;
+    for method in methods {
+        let mut routes = grouped.get(&method).unwrap().clone();
+        // Sort by path
+        routes.sort_by(|a, b| a.path.cmp(&b.path));
+        
+        total += routes.len();
+        
+        for route in routes {
+            print_route(&route, verbose);
+        }
+    }
+    
+    if !verbose {
+        println!("  {}", "────────────────────────────────────────────────────────────────".dimmed());
+    }
+    
+    println!("\n{} {} routes registered", "✓".bright_green(), total.to_string().bright_cyan());
+    
+    if filter.is_some() {
+        println!("  {}", "(filtered)".dimmed());
+    }
+    
+    println!("\n  Tip: Use {} for detailed information", "--verbose".bright_cyan());
+    if filter.is_none() {
+        println!("       Use {} to filter routes", "--filter <pattern>".bright_cyan());
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RouteInfo {
+    method: String,
+    path: String,
+    handler: String,
+    file: String,
+    line: usize,
+}
+
+fn scan_routes_in_directory(dir: &str) -> Vec<RouteInfo> {
+    use std::fs;
+    use walkdir::WalkDir;
+    
+    let mut routes = Vec::new();
+    
+    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            if let Ok(content) = fs::read_to_string(path) {
+                routes.extend(parse_routes_from_file(&content, path.to_str().unwrap()));
+            }
+        }
+    }
+    
+    routes
+}
+
+fn parse_routes_from_file(content: &str, file: &str) -> Vec<RouteInfo> {
+    use regex::Regex;
+    
+    let mut routes = Vec::new();
+    
+    // Regex to match route macros: #[get("/path")], #[post("/path")], etc.
+    let route_regex = Regex::new(r#"#\[(get|post|put|patch|delete|options|head)\("([^"]+)"\)\]"#).unwrap();
+    let handler_regex = Regex::new(r"(?:async\s+)?fn\s+(\w+)").unwrap();
+    
+    let lines: Vec<&str> = content.lines().collect();
+    
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(caps) = route_regex.captures(line) {
+            let method = caps.get(1).unwrap().as_str().to_uppercase();
+            let path = caps.get(2).unwrap().as_str().to_string();
+            
+            // Look for handler name in next few lines
+            let handler = lines.get(i + 1)
+                .and_then(|next_line| handler_regex.captures(next_line))
+                .and_then(|caps| caps.get(1))
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_else(|| "<unknown>".to_string());
+            
+            routes.push(RouteInfo {
+                method,
+                path,
+                handler,
+                file: file.to_string(),
+                line: i + 1,
+            });
+        }
+    }
+    
+    routes
+}
+
+fn print_route(route: &RouteInfo, verbose: bool) {
+    use colored::Colorize;
+    
+    let method_colored = match route.method.as_str() {
+        "GET" => route.method.bright_green(),
+        "POST" => route.method.bright_blue(),
+        "PUT" => route.method.bright_yellow(),
+        "PATCH" => route.method.bright_cyan(),
+        "DELETE" => route.method.bright_red(),
+        _ => route.method.bright_white(),
+    };
+    
+    let path_colored = route.path.bright_white();
+    let handler_colored = route.handler.bright_magenta();
+    
+    if verbose {
+        println!("  {} {}", 
+            method_colored,
+            path_colored
+        );
+        println!("    {} {}", "Handler:".dimmed(), handler_colored);
+        println!("    {} {}:{}", "Location:".dimmed(), route.file.dimmed(), route.line.to_string().dimmed());
+        println!();
+    } else {
+        println!("  {:7} {:40} {}", 
+            method_colored,
+            path_colored,
+            handler_colored.dimmed()
+        );
+    }
+}
