@@ -1,0 +1,12 @@
+[package]
+name = "firework-cors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "CORS middleware for Firework framework"
+
+[dependencies]
+firework = { path = "../../" }
+serde = { version = "1.0", features = ["derive"] }
+async-trait = "0.1"

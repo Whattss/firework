@@ -14,25 +14,29 @@ lazy_static::lazy_static! {
 
 /// Store state that persists across hot reloads
 pub fn preserve_state<T: Any + Send + Sync + 'static>(key: impl Into<String>, value: T) {
-    let mut store = STATE_STORE.write().unwrap();
+    let mut store = STATE_STORE.write()
+        .expect("Hot reload state store lock poisoned - this is a fatal error");
     store.insert(key.into(), Box::new(value));
 }
 
 /// Retrieve preserved state from previous reload
 pub fn restore_state<T: Any + Send + Sync + Clone + 'static>(key: &str) -> Option<T> {
-    let store = STATE_STORE.read().unwrap();
+    let store = STATE_STORE.read()
+        .expect("Hot reload state store lock poisoned - this is a fatal error");
     store.get(key).and_then(|v| v.downcast_ref::<T>()).cloned()
 }
 
 /// Check if state exists
 pub fn has_state(key: &str) -> bool {
-    let store = STATE_STORE.read().unwrap();
+    let store = STATE_STORE.read()
+        .expect("Hot reload state store lock poisoned - this is a fatal error");
     store.contains_key(key)
 }
 
 /// Clear all preserved state
 pub fn clear_state() {
-    let mut store = STATE_STORE.write().unwrap();
+    let mut store = STATE_STORE.write()
+        .expect("Hot reload state store lock poisoned - this is a fatal error");
     store.clear();
 }
 

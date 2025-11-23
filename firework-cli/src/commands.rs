@@ -279,7 +279,7 @@ fn create_fullstack_template(name: &str) {
     fs::write(format!("{}/static/index.html", name), index_html).expect("Failed to write index.html");
 }
 
-pub fn list_routes(filter: Option<&str>, verbose: bool) {
+pub fn list_routes(filter: Option<&str>, verbose: bool, export: Option<&str>, check: bool, stats: bool) {
     use std::collections::HashMap;
     
     println!("{} Scanning for routes...\n", "🔍".bright_yellow());
@@ -290,6 +290,24 @@ pub fn list_routes(filter: Option<&str>, verbose: bool) {
     if routes.is_empty() {
         println!("{} No routes found", "⚠".bright_yellow());
         println!("\n  Make sure you're using #[get], #[post], etc. macros from firework");
+        return;
+    }
+    
+    // Check for duplicates if requested
+    if check {
+        check_route_conflicts(&routes);
+        return;
+    }
+    
+    // Show stats if requested
+    if stats {
+        show_route_stats(&routes);
+        return;
+    }
+    
+    // Export to OpenAPI if requested
+    if let Some(format) = export {
+        export_routes(&routes, format);
         return;
     }
     
@@ -308,7 +326,9 @@ pub fn list_routes(filter: Option<&str>, verbose: bool) {
     }
     
     if grouped.is_empty() {
-        println!("{} No routes match filter '{}'", "⚠".bright_yellow(), filter.unwrap());
+        if let Some(f) = filter {
+            println!("{} No routes match filter '{}'", "⚠".bright_yellow(), f);
+        }
         return;
     }
     
@@ -328,14 +348,16 @@ pub fn list_routes(filter: Option<&str>, verbose: bool) {
     // Print routes
     let mut total = 0;
     for method in methods {
-        let mut routes = grouped.get(&method).unwrap().clone();
-        // Sort by path
-        routes.sort_by(|a, b| a.path.cmp(&b.path));
-        
-        total += routes.len();
-        
-        for route in routes {
-            print_route(&route, verbose);
+        if let Some(route_list) = grouped.get(&method) {
+            let mut routes = route_list.clone();
+            // Sort by path
+            routes.sort_by(|a, b| a.path.cmp(&b.path));
+            
+            total += routes.len();
+            
+            for route in routes {
+                print_route(&route, verbose);
+            }
         }
     }
     
@@ -353,6 +375,9 @@ pub fn list_routes(filter: Option<&str>, verbose: bool) {
     if filter.is_none() {
         println!("       Use {} to filter routes", "--filter <pattern>".bright_cyan());
     }
+    println!("       Use {} to check for conflicts", "--check".bright_cyan());
+    println!("       Use {} to show statistics", "--stats".bright_cyan());
+    println!("       Use {} to export as OpenAPI", "--export openapi".bright_cyan());
 }
 
 #[derive(Debug, Clone)]
@@ -362,6 +387,7 @@ struct RouteInfo {
     handler: String,
     file: String,
     line: usize,
+    middleware: Option<String>,
 }
 
 fn scan_routes_in_directory(dir: &str) -> Vec<RouteInfo> {
@@ -374,7 +400,9 @@ fn scan_routes_in_directory(dir: &str) -> Vec<RouteInfo> {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             if let Ok(content) = fs::read_to_string(path) {
-                routes.extend(parse_routes_from_file(&content, path.to_str().unwrap()));
+                if let Some(path_str) = path.to_str() {
+                    routes.extend(parse_routes_from_file(&content, path_str));
+                }
             }
         }
     }
@@ -387,16 +415,23 @@ fn parse_routes_from_file(content: &str, file: &str) -> Vec<RouteInfo> {
     
     let mut routes = Vec::new();
     
-    // Regex to match route macros: #[get("/path")], #[post("/path")], etc.
-    let route_regex = Regex::new(r#"#\[(get|post|put|patch|delete|options|head)\("([^"]+)"\)\]"#).unwrap();
-    let handler_regex = Regex::new(r"(?:async\s+)?fn\s+(\w+)").unwrap();
+    // Regex to match route macros - these are compile-time constants so unwrap is safe
+    let route_regex = Regex::new(r#"#\[(get|post|put|patch|delete|options|head)\("([^"]+)"\)\]"#)
+        .expect("Invalid route regex pattern");
+    let handler_regex = Regex::new(r"(?:async\s+)?fn\s+(\w+)")
+        .expect("Invalid handler regex pattern");
     
     let lines: Vec<&str> = content.lines().collect();
     
     for (i, line) in lines.iter().enumerate() {
         if let Some(caps) = route_regex.captures(line) {
-            let method = caps.get(1).unwrap().as_str().to_uppercase();
-            let path = caps.get(2).unwrap().as_str().to_string();
+            // Regex captures are guaranteed by the pattern
+            let method = caps.get(1)
+                .map(|m| m.as_str().to_uppercase())
+                .unwrap_or_else(|| "UNKNOWN".to_string());
+            let path = caps.get(2)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_else(|| "/unknown".to_string());
             
             // Look for handler name in next few lines
             let handler = lines.get(i + 1)
@@ -405,17 +440,39 @@ fn parse_routes_from_file(content: &str, file: &str) -> Vec<RouteInfo> {
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_else(|| "<unknown>".to_string());
             
+            // Try to detect middleware (look for #[middleware] or similar)
+            let middleware = detect_middleware(&lines, i);
+            
             routes.push(RouteInfo {
                 method,
                 path,
                 handler,
                 file: file.to_string(),
                 line: i + 1,
+                middleware,
             });
         }
     }
     
     routes
+}
+
+// Detect middleware from route annotations
+fn detect_middleware(lines: &[&str], route_line: usize) -> Option<String> {
+    // Look backwards for middleware annotations
+    for i in (route_line.saturating_sub(5)..route_line).rev() {
+        if let Some(line) = lines.get(i) {
+            if line.contains("#[middleware") {
+                // Extract middleware name
+                if let Some(start) = line.find('(') {
+                    if let Some(end) = line.find(')') {
+                        return Some(line[start + 1..end].trim_matches('"').to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn print_route(route: &RouteInfo, verbose: bool) {
@@ -440,12 +497,268 @@ fn print_route(route: &RouteInfo, verbose: bool) {
         );
         println!("    {} {}", "Handler:".dimmed(), handler_colored);
         println!("    {} {}:{}", "Location:".dimmed(), route.file.dimmed(), route.line.to_string().dimmed());
+        if let Some(middleware) = &route.middleware {
+            println!("    {} {}", "Middleware:".dimmed(), middleware.bright_yellow());
+        }
         println!();
     } else {
-        println!("  {:7} {:40} {}", 
+        print!("  {:7} {:40} {}", 
             method_colored,
             path_colored,
             handler_colored.dimmed()
         );
+        
+        if let Some(middleware) = &route.middleware {
+            print!("  [{}]", middleware.bright_yellow());
+        }
+        
+        println!();
+    }
+}
+
+// Check for route conflicts
+fn check_route_conflicts(routes: &[RouteInfo]) {
+    use std::collections::HashMap;
+    use colored::Colorize;
+    
+    println!("{} Checking for route conflicts...\n", "🔍".bright_yellow());
+    
+    let mut conflicts = HashMap::new();
+    let mut has_conflicts = false;
+    
+    for route in routes {
+        let key = format!("{} {}", route.method, route.path);
+        conflicts.entry(key.clone())
+            .or_insert_with(Vec::new)
+            .push(route);
+    }
+    
+    for (key, routes_list) in conflicts {
+        if routes_list.len() > 1 {
+            has_conflicts = true;
+            println!("{} Duplicate route found: {}", "⚠".bright_red(), key.bright_yellow());
+            for route in routes_list {
+                println!("    {} {}:{}", "→".dimmed(), route.file.dimmed(), route.line);
+            }
+            println!();
+        }
+    }
+    
+    // Check for parameter conflicts
+    let mut param_groups: HashMap<String, Vec<&RouteInfo>> = HashMap::new();
+    for route in routes {
+        let pattern = route.path.split('/').map(|segment| {
+            if segment.starts_with(':') {
+                ":param"
+            } else {
+                segment
+            }
+        }).collect::<Vec<_>>().join("/");
+        
+        param_groups.entry(format!("{} {}", route.method, pattern))
+            .or_insert_with(Vec::new)
+            .push(route);
+    }
+    
+    for (pattern, routes_list) in param_groups {
+        if routes_list.len() > 1 {
+            println!("{} Potential parameter conflict: {}", "⚠".bright_yellow(), pattern);
+            for route in routes_list {
+                println!("    {} {} ({}:{})", "→".dimmed(), route.path.bright_cyan(), route.file.dimmed(), route.line);
+            }
+            println!();
+        }
+    }
+    
+    if !has_conflicts {
+        println!("{} No route conflicts found!", "✓".bright_green());
+    }
+}
+
+// Show route statistics
+fn show_route_stats(routes: &[RouteInfo]) {
+    use std::collections::HashMap;
+    use colored::Colorize;
+    
+    println!("{} Route Statistics\n", "📊".bright_yellow());
+    
+    let mut method_counts: HashMap<String, usize> = HashMap::new();
+    let mut file_counts: HashMap<String, usize> = HashMap::new();
+    let mut total_params = 0;
+    let mut middleware_count = 0;
+    
+    for route in routes {
+        *method_counts.entry(route.method.clone()).or_insert(0) += 1;
+        *file_counts.entry(route.file.clone()).or_insert(0) += 1;
+        
+        if route.path.contains(':') {
+            total_params += route.path.matches(':').count();
+        }
+        
+        if route.middleware.is_some() {
+            middleware_count += 1;
+        }
+    }
+    
+    println!("  {} Total Routes", "📍".bright_cyan());
+    println!("    {}", routes.len().to_string().bright_green());
+    println!();
+    
+    println!("  {} By HTTP Method", "🔤".bright_cyan());
+    let mut methods: Vec<_> = method_counts.iter().collect();
+    methods.sort_by(|a, b| b.1.cmp(a.1));
+    for (method, count) in methods {
+        let method_colored = match method.as_str() {
+            "GET" => method.bright_green(),
+            "POST" => method.bright_blue(),
+            "PUT" => method.bright_yellow(),
+            "PATCH" => method.bright_cyan(),
+            "DELETE" => method.bright_red(),
+            _ => method.bright_white(),
+        };
+        println!("    {:7} {}", method_colored, count.to_string().bright_white());
+    }
+    println!();
+    
+    println!("  {} Top Files", "📁".bright_cyan());
+    let mut files: Vec<_> = file_counts.iter().collect();
+    files.sort_by(|a, b| b.1.cmp(a.1));
+    for (file, count) in files.iter().take(5) {
+        let short_file = file.split('/').last().unwrap_or(file);
+        println!("    {:20} {}", short_file.dimmed(), count.to_string().bright_white());
+    }
+    println!();
+    
+    println!("  {} Route Parameters", "🔖".bright_cyan());
+    println!("    {} total params in {} routes", 
+        total_params.to_string().bright_green(),
+        routes.iter().filter(|r| r.path.contains(':')).count().to_string().bright_white()
+    );
+    println!();
+    
+    if middleware_count > 0 {
+        println!("  {} Middleware Usage", "🔧".bright_cyan());
+        println!("    {} routes with middleware", middleware_count.to_string().bright_green());
+        println!();
+    }
+}
+
+// Export routes to OpenAPI/Swagger format
+fn export_routes(routes: &[RouteInfo], format: &str) {
+    use colored::Colorize;
+    use std::fs;
+    
+    match format {
+        "openapi" | "swagger" => {
+            println!("{} Exporting routes to OpenAPI 3.0 format...\n", "📤".bright_yellow());
+            
+            let openapi = generate_openapi_spec(routes);
+            let filename = "openapi.json";
+            
+            fs::write(filename, openapi).expect("Failed to write OpenAPI spec");
+            
+            println!("{} OpenAPI spec exported to {}", "✓".bright_green(), filename.bright_cyan());
+            println!("\n  You can now:");
+            println!("    • Import into Postman");
+            println!("    • Use with Swagger UI");
+            println!("    • Generate client SDKs");
+        }
+        "markdown" | "md" => {
+            println!("{} Exporting routes to Markdown...\n", "📤".bright_yellow());
+            
+            let markdown = generate_markdown_docs(routes);
+            let filename = "ROUTES.md";
+            
+            fs::write(filename, markdown).expect("Failed to write markdown");
+            
+            println!("{} Route documentation exported to {}", "✓".bright_green(), filename.bright_cyan());
+        }
+        _ => {
+            eprintln!("{} Unknown export format: {}", "✗".bright_red(), format);
+            eprintln!("  Supported formats: openapi, swagger, markdown, md");
+        }
+    }
+}
+
+// Generate OpenAPI 3.0 specification
+fn generate_openapi_spec(routes: &[RouteInfo]) -> String {
+    use serde_json::json;
+    
+    let mut paths = serde_json::Map::new();
+    
+    for route in routes {
+        let path_entry = paths.entry(route.path.clone()).or_insert_with(|| json!({}));
+        if let Some(path_obj) = path_entry.as_object_mut() {
+            let method = route.method.to_lowercase();
+            path_obj.insert(method, json!({
+                "summary": route.handler.clone(),
+                "operationId": route.handler.clone(),
+                "responses": {
+                    "200": {
+                        "description": "Successful response"
+                    }
+                },
+                "tags": [extract_tag_from_path(&route.path)]
+            }));
+        }
+    }
+    
+    let spec = json!({
+        "openapi": "3.0.0",
+        "info": {
+            "title": "Firework API",
+            "version": "1.0.0",
+            "description": "Auto-generated API documentation"
+        },
+        "paths": paths
+    });
+    
+    serde_json::to_string_pretty(&spec)
+        .unwrap_or_else(|_| String::from("{}"))
+}
+
+// Generate Markdown documentation
+fn generate_markdown_docs(routes: &[RouteInfo]) -> String {
+    use std::collections::HashMap;
+    
+    let mut md = String::from("# API Routes\n\n");
+    md.push_str("Auto-generated route documentation\n\n");
+    md.push_str("---\n\n");
+    
+    // Group by tag (extracted from path)
+    let mut grouped: HashMap<String, Vec<&RouteInfo>> = HashMap::new();
+    for route in routes {
+        let tag = extract_tag_from_path(&route.path);
+        grouped.entry(tag).or_insert_with(Vec::new).push(route);
+    }
+    
+    for (tag, routes_list) in grouped {
+        md.push_str(&format!("## {}\n\n", tag));
+        
+        for route in routes_list {
+            md.push_str(&format!("### {} `{}`\n\n", route.method, route.path));
+            md.push_str(&format!("**Handler:** `{}`\n\n", route.handler));
+            if let Some(middleware) = &route.middleware {
+                md.push_str(&format!("**Middleware:** `{}`\n\n", middleware));
+            }
+            md.push_str("---\n\n");
+        }
+    }
+    
+    md
+}
+
+// Extract tag from path (e.g., /api/users/... -> Users)
+fn extract_tag_from_path(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    
+    if parts.len() >= 2 {
+        let tag = parts[1];
+        // Capitalize first letter
+        tag.chars().next()
+            .map(|c| c.to_uppercase().collect::<String>() + &tag[1..])
+            .unwrap_or_else(|| tag.to_string())
+    } else {
+        "General".to_string()
     }
 }

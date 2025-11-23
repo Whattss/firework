@@ -182,6 +182,45 @@ impl Request {
         self.uri.query.as_ref()?.get(name)
     }
     
+    /// Get cookie by name
+    /// 
+    /// # Example
+    /// 
+    /// ```
+    /// let session_id = req.cookie("session_id");
+    /// ```
+    pub fn cookie(&self, name: &str) -> Option<String> {
+        self.headers
+            .get("cookie")
+            .or_else(|| self.headers.get("Cookie"))
+            .and_then(|cookies| {
+                cookies.iter()
+                    .flat_map(|s| s.split(';'))
+                    .find_map(|pair| {
+                        let pair = pair.trim();
+                        let (k, v) = pair.split_once('=')?;
+                        (k.trim() == name).then(|| v.trim().to_string())
+                    })
+            })
+    }
+    
+    /// Get all cookies as a HashMap
+    pub fn cookies(&self) -> std::collections::HashMap<String, String> {
+        let mut result = std::collections::HashMap::new();
+        
+        if let Some(cookie_headers) = self.headers.get("cookie").or_else(|| self.headers.get("Cookie")) {
+            for cookie_header in cookie_headers {
+                for pair in cookie_header.split(';') {
+                    if let Some((k, v)) = pair.trim().split_once('=') {
+                        result.insert(k.trim().to_string(), v.trim().to_string());
+                    }
+                }
+            }
+        }
+        
+        result
+    }
+    
     /// Get the request body as a UTF-8 string (consumes body)
     pub fn body_string(mut self) -> Result<String, std::string::FromUtf8Error> {
         String::from_utf8(std::mem::take(&mut self.body))

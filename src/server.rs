@@ -249,27 +249,95 @@ impl Server {
         let listener = TcpListener::from_std(listener)?;
 
         println!("[SERVER] Listening on {} with SO_REUSEPORT", addr);
+        println!("[SERVER] Press Ctrl+C for graceful shutdown");
 
-        loop {
-            let (socket, remote_addr) = listener.accept().await?;
-
-            // Disable Nagle's algorithm for lower latency
-            let _ = socket.set_nodelay(true);
-
-            let router = Arc::clone(&router);
-            let middlewares = Arc::clone(&middlewares);
-            let async_middlewares = Arc::clone(&async_middlewares);
-            
-            let ws_routes = Arc::clone(&ws_routes);
-
-            tokio::spawn(async move {
-                let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr, ws_routes).await;
+        // Setup graceful shutdown signal handler
+        let shutdown_signal = async {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
                 
-                if let Err(e) = result {
-                    eprintln!("[ERROR] Connection handler error: {}", e);
+                let mut sigterm = signal(SignalKind::terminate())
+                    .expect("Failed to setup SIGTERM handler");
+                let mut sigint = signal(SignalKind::interrupt())
+                    .expect("Failed to setup SIGINT handler");
+                
+                tokio::select! {
+                    _ = sigterm.recv() => {
+                        println!("\n[SERVER] Received SIGTERM, shutting down gracefully...");
+                    }
+                    _ = sigint.recv() => {
+                        println!("\n[SERVER] Received SIGINT (Ctrl+C), shutting down gracefully...");
+                    }
                 }
-            });
+            }
+            
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c()
+                    .await
+                    .expect("Failed to listen for Ctrl+C");
+                println!("\n[SERVER] Received Ctrl+C, shutting down gracefully...");
+            }
+        };
+
+        // Run server with graceful shutdown
+        tokio::select! {
+            result = async {
+                loop {
+                    let (socket, remote_addr) = listener.accept().await?;
+
+                    // Disable Nagle's algorithm for lower latency
+                    let _ = socket.set_nodelay(true);
+
+                    let router = Arc::clone(&router);
+                    let middlewares = Arc::clone(&middlewares);
+                    let async_middlewares = Arc::clone(&async_middlewares);
+                    let ws_routes = Arc::clone(&ws_routes);
+
+                    tokio::spawn(async move {
+                        let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr, ws_routes).await;
+                        
+                        if let Err(e) = result {
+                            // Check if it's an IO error and if it's a common client disconnection
+                            if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                                use std::io::ErrorKind;
+                                match io_err.kind() {
+                                    ErrorKind::ConnectionReset | ErrorKind::BrokenPipe | ErrorKind::ConnectionAborted => {
+                                        // Client closed connection early - this is normal with HMR/fast navigation
+                                        // Silently ignore these
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Log other errors
+                            eprintln!("[ERROR] Connection handler error: {}", e);
+                        }
+                    });
+                }
+                #[allow(unreachable_code)]
+                Ok::<(), Box<dyn std::error::Error>>(())
+            } => {
+                result?;
+            }
+            _ = shutdown_signal => {
+                println!("[SERVER] Initiating graceful shutdown...");
+                
+                // Give active connections time to finish (max 10 seconds)
+                println!("[SERVER] Waiting for active connections to complete (max 10s)...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                
+                // Shutdown plugins
+                let plugin_registry = crate::plugin::registry();
+                let registry = plugin_registry.read().await;
+                registry.shutdown_all().await?;
+                
+                println!("[SERVER] Shutdown complete ✅");
+            }
         }
+
+        Ok(())
     }
 
     /// Start server using configuration from Firework.toml
@@ -420,6 +488,26 @@ async fn handle_connection(
                                                 break;
                                             }
                                             Flow::Continue => {}
+                                        }
+                                    }
+                                }
+                                
+                                // Execute plugin on_request hooks if not stopped
+                                if !stopped {
+                                    let plugin_registry = crate::plugin::registry();
+                                    let registry = plugin_registry.read().await;
+                                    
+                                    for plugin in registry.plugins() {
+                                        match plugin.on_request(&mut request, &mut response).await {
+                                            Ok(Some(plugin_response)) => {
+                                                response = plugin_response;
+                                                stopped = true;
+                                                break;
+                                            }
+                                            Ok(None) => {}
+                                            Err(e) => {
+                                                eprintln!("[PLUGIN] Error in {}: {}", plugin.name(), e);
+                                            }
                                         }
                                     }
                                 }

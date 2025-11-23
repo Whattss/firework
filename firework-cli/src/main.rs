@@ -32,6 +32,15 @@ enum Commands {
         
         #[arg(short, long, help = "Show detailed route information")]
         verbose: bool,
+        
+        #[arg(short, long, help = "Export routes to format (openapi, markdown)")]
+        export: Option<String>,
+        
+        #[arg(short, long, help = "Check for route conflicts")]
+        check: bool,
+        
+        #[arg(short, long, help = "Show route statistics")]
+        stats: bool,
     },
     
     #[command(about = "Create configuration file")]
@@ -84,8 +93,8 @@ fn main() {
         Commands::Dev => {
             commands::run_dev(true); // Always enable hot reload for dev alias
         }
-        Commands::Routes { filter, verbose } => {
-            commands::list_routes(filter.as_deref(), verbose);
+        Commands::Routes { filter, verbose, export, check, stats } => {
+            commands::list_routes(filter.as_deref(), verbose, export.as_deref(), check, stats);
         }
         Commands::Create { resource } => match resource {
             CreateResource::Config => {

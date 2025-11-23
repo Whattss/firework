@@ -1,4 +1,5 @@
 mod config;
+mod cookie;
 mod error;
 mod extract;
 mod macros;
@@ -8,6 +9,8 @@ mod response;
 mod router;
 mod serve;
 mod server;
+mod upload;
+mod validation;
 
 pub mod log;
 pub mod websocket;
@@ -22,6 +25,7 @@ pub mod hot_reload_state;
 pub mod test;
 
 pub use config::{Config, ServerConfig, PluginConfig, config, init_config, get_config, load_plugin_config, load_plugin_config_as};
+pub use cookie::{Cookie, SameSite};
 pub use error::{Error, Result};
 pub use extract::{FromRequest, PluginExtractor, Extract, IntoResponse, Json, Path, Query, Body, Header};
 pub use plugin::{Plugin, PluginRegistry, PluginError, PluginResult, PluginMetadata, register_plugin, register_plugin_async, auto_register_plugins, registry as plugin_registry, get_plugin};
@@ -30,6 +34,8 @@ pub use response::{Response, ResponseBody, StatusCode};
 pub use router::Router;
 pub use serve::{serve_file, serve_dir, serve_static};
 pub use server::Server;
+pub use upload::{FormData, UploadedFile, UploadConfig};
+pub use validation::{Validated, ValidationError, validators};
 
 pub use websocket::{WebSocket, Message as WebSocketMessage, WebSocketHandler, WebSocketRoom, is_websocket_upgrade, websocket_upgrade};
 
@@ -38,6 +44,9 @@ pub use hot_reload::HotReload;
 
 #[cfg(any(test, feature = "testing"))]
 pub use test::{TestClient, TestRequest, TestResponse, TestExt};
+
+// Re-export validator::Validate for convenience
+pub use validator::Validate;
 
 // Re-export macros
 pub use firework_macros::{

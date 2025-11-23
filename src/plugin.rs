@@ -73,8 +73,9 @@ pub trait Plugin: Send + Sync {
     }
     
     /// Called before each request (optional middleware-like hook)
-    async fn on_request(&self, _req: &mut Request) -> PluginResult<()> {
-        Ok(())
+    /// Return Some(Response) to short-circuit routing and return immediately
+    async fn on_request(&self, _req: &mut Request, _res: &mut Response) -> PluginResult<Option<Response>> {
+        Ok(None)
     }
     
     /// Called after each request (optional middleware-like hook)
@@ -170,30 +171,6 @@ impl PluginRegistry {
         for plugin in &self.plugins {
             println!("[PLUGIN] Reloading: {}", plugin.name());
             plugin.on_reload().await?;
-        }
-        Ok(())
-    }
-    
-    /// Run on_request hooks
-    pub async fn on_request(&self, req: &mut Request) -> PluginResult<()> {
-        for plugin in &self.plugins {
-            plugin.on_request(req).await?;
-        }
-        Ok(())
-    }
-    
-    /// Run on_response hooks
-    pub async fn on_response(&self, req: &Request, res: &mut Response) -> PluginResult<()> {
-        for plugin in &self.plugins {
-            plugin.on_response(req, res).await?;
-        }
-        Ok(())
-    }
-    
-    /// Run on_stream_accept hooks
-    pub async fn on_stream_accept(&self, stream: &mut tokio::net::TcpStream) -> PluginResult<()> {
-        for plugin in &self.plugins {
-            plugin.on_stream_accept(stream).await?;
         }
         Ok(())
     }

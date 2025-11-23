@@ -6,6 +6,10 @@ use tokio::sync::RwLock;
 use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
+use once_cell::sync::OnceCell;
+
+// 🚀 CONEXIÓN GLOBAL OPTIMIZADA - Arc para compartir sin clonar
+static GLOBAL_DB: OnceCell<Arc<DatabaseConnection>> = OnceCell::new();
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SeaOrmConfig {
@@ -77,8 +81,12 @@ impl Plugin for SeaOrmPlugin {
         println!("[SeaORM] Connecting to database: {}", self.database_url);
         let db = Database::connect(&self.database_url).await
             .map_err(|e| PluginError(format!("Failed to connect to database: {}", e)))?;
+        
+        // 🚀 GUARDAR Arc EN GLOBAL - SOLO CLONAMOS EL Arc, NO LA CONEXIÓN
+        GLOBAL_DB.set(Arc::new(db.clone())).map_err(|_| PluginError("Global DB already set".into()))?;
+        
         *self.db.write().await = Some(db);
-        println!("[SeaORM] Database connected successfully");
+        println!("[SeaORM] Database connected successfully (GLOBAL + LOCAL)");
         Ok(())
     }
     
@@ -94,26 +102,28 @@ impl Plugin for SeaOrmPlugin {
 }
 
 /// Database connection extractor for handler parameters
+/// 
+/// 🚀 OPTIMIZED: Uses Arc internally but exposes DatabaseConnection
 #[derive(Clone)]
 pub struct DbConn(pub DatabaseConnection);
 
+impl DbConn {
+    /// Create from Arc (internal use)
+    fn from_arc(arc_db: Arc<DatabaseConnection>) -> Self {
+        // Clone the DatabaseConnection from Arc - optimized path
+        Self((*arc_db).clone())
+    }
+}
+
 #[async_trait::async_trait]
 impl firework::FromRequest for DbConn {
-    async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        // Try to get from context first (as Arc now)
-        if let Some(db_arc) = req.get_context::<DatabaseConnection>() {
-            return Ok(DbConn((*db_arc).clone()));
+    async fn from_request(_req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
+        // 🚀 USAR Arc GLOBAL - MUY EFICIENTE
+        if let Some(global_db_arc) = GLOBAL_DB.get() {
+            return Ok(DbConn::from_arc(Arc::clone(global_db_arc)));
         }
         
-        // Otherwise get from plugin (fully async - no blocking!)
-        let registry = firework::plugin_registry().read().await;
-        let plugin = registry.get::<SeaOrmPlugin>()
-            .ok_or_else(|| firework::Error::Internal("SeaORM plugin not registered".into()))?;
-        
-        let db = plugin.db().await
-            .ok_or_else(|| firework::Error::Internal("No database connection available".into()))?;
-        
-        Ok(DbConn(db))
+        Err(firework::Error::Internal("Global database not initialized".into()))
     }
 }
 
@@ -150,16 +160,13 @@ pub mod helpers {
         }
     }
     
-    /// Middleware to inject database connection into request context (async version)
-    pub async fn db_middleware_async(req: &mut Request, _res: &mut Response) -> firework::Flow {
-        let registry = firework::plugin_registry().read().await;
-        
-        if let Some(plugin) = registry.get::<SeaOrmPlugin>() {
-            if let Some(db) = plugin.db().await {
-                req.set_context(db);
-            }
-        }
-        
+    /// Middleware to inject database connection (DEPRECATED - NO LONGER NEEDED)
+    /// 
+    /// ⚠️ All extractors now use the global database connection automatically.
+    /// This middleware does nothing and can be safely removed.
+    #[deprecated(note = "No longer needed - extractors use global DB automatically")]
+    pub async fn db_middleware_async(_req: &mut Request, _res: &mut Response) -> firework::Flow {
+        // 🔥 NO-OP - Extractors use GLOBAL_DB directly
         firework::Flow::Continue
     }
     
@@ -321,10 +328,10 @@ where
     <<M::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType: FromStr + Send + Sync,
 {
     async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        // Get database connection (returns Arc<DatabaseConnection>)
-        let db_arc = req.get_context::<DatabaseConnection>()
+        // 🚀 USAR CONEXIÓN GLOBAL - igual que DbConn
+        let db_arc = GLOBAL_DB.get()
             .ok_or_else(|| firework::Error::Internal(
-                "No database connection available. Did you add db_middleware_async?".into()
+                "Database not initialized. Did you register SeaOrmPlugin?".into()
             ))?;
         
         // Extract entity name for better error messages
@@ -371,9 +378,9 @@ where
                     format!("Invalid {} format for parameter '{}'", entity_name, param_name)
                 ))?;
         
-        // Query database (keep db_arc alive for the whole await)
+        // Query database
         let entity = M::Entity::find_by_id(pk)
-            .one(&*db_arc)  // Dereference Arc to get &DatabaseConnection
+            .one(&**db_arc)  // Dereference Arc twice: &Arc<DatabaseConnection> -> DatabaseConnection
             .await
             .map_err(|e| firework::Error::Internal(
                 format!("Database error while fetching {}: {}", entity_name, e)
@@ -524,10 +531,10 @@ where
     <<M::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType: FromStr + Send + Sync,
 {
     async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        // Get database connection
-        let db = req.get_context::<DatabaseConnection>()
+        // 🚀 USAR CONEXIÓN GLOBAL - igual que DbConn
+        let db = GLOBAL_DB.get()
             .ok_or_else(|| firework::Error::Internal(
-                "No database connection available. Did you add db_middleware_async?".into()
+                "Database not initialized. Did you register SeaOrmPlugin?".into()
             ))?;
         
         let entity_name = std::any::type_name::<M>()
@@ -552,7 +559,7 @@ where
         
         // Query database
         let entity = M::Entity::find_by_id(pk)
-            .one(&*db)
+            .one(&**db)
             .await
             .map_err(|e| firework::Error::Internal(
                 format!("Database error while fetching {}: {}", entity_name, e)
@@ -655,13 +662,14 @@ where
     <E as EntityTrait>::Model: Send + Sync + sea_orm::FromQueryResult,
 {
     async fn from_request(req: &mut Request, _res: &mut Response) -> firework::Result<Self> {
-        let db = req.get_context::<DatabaseConnection>()
+        // 🚀 USAR CONEXIÓN GLOBAL - igual que DbConn
+        let db = GLOBAL_DB.get()
             .ok_or_else(|| firework::Error::Internal(
-                "No database connection available. Did you add db_middleware_async?".into()
+                "Database not initialized. Did you register SeaOrmPlugin?".into()
             ))?;
         
         let entities = E::find()
-            .all(&*db)
+            .all(&**db)
             .await
             .map_db_err()?;
         
@@ -669,23 +677,13 @@ where
     }
 }
 
-/// Convenience function to use as async middleware
+/// Middleware to inject database connection into request context (DEPRECATED)
 /// 
-/// # Example
-/// ```ignore
-/// routes!()
-///     .async_middleware(firework_seaorm::db_middleware_async)
-///     .listen("127.0.0.1:8080")
-///     .await;
-/// ```
-pub async fn db_middleware_async(req: &mut Request, _res: &mut Response) -> firework::Flow {
-    let registry = firework::plugin_registry().read().await;
-    
-    if let Some(plugin) = registry.get::<SeaOrmPlugin>() {
-        if let Some(db) = plugin.db().await {
-            req.set_context(db);
-        }
-    }
-    
+/// ⚠️ NO LONGER NEEDED: All extractors (DbConn, DbEntity, DbAll) now use
+/// the global database connection automatically. This middleware does nothing.
+/// 
+/// You can safely remove calls to this function.
+pub async fn db_middleware_async(_req: &mut Request, _res: &mut Response) -> firework::Flow {
+    // 🔥 NO-OP - Extractors use GLOBAL_DB directly
     firework::Flow::Continue
 }

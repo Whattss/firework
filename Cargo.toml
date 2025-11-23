@@ -32,6 +32,10 @@ tokio-tungstenite = "0.21"
 sha1 = "0.10"
 base64 = "0.21"
 futures-util = "0.3"
+validator = { version = "0.18", features = ["derive"] }
+multer = "3.1"
+tempfile = "3.10"
+chrono = "0.4"
 
 [dev-dependencies]
 firework-seaorm = { path = "./plugins/firework-seaorm" }
@@ -87,8 +91,7 @@ members = [
     "plugins/firework-proxy",
     "plugins/firework-vite",
     "plugins/firework-dataloader",
-    "undergun",
-    "examples/threads-clone/backend", "examples/todo-app",
+    "examples/threads-clone/backend", "examples/todo-app", "plugins/firework-cors", "plugins/firework-security", "plugins/firework-compress",
 ]
 resolver = "2"
 

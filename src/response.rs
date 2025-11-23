@@ -229,6 +229,41 @@ impl Response {
         self.headers.insert(key.into(), value.into());
         self
     }
+    
+    /// Set a cookie
+    /// 
+    /// # Example
+    /// 
+    /// ```
+    /// use firework::{Cookie, SameSite};
+    /// 
+    /// let cookie = Cookie::new("session_id", "abc123")
+    ///     .http_only(true)
+    ///     .secure(true)
+    ///     .same_site(SameSite::Strict);
+    /// 
+    /// response.set_cookie(cookie);
+    /// ```
+    pub fn set_cookie(&mut self, cookie: crate::Cookie) {
+        self.headers
+            .entry("Set-Cookie".to_string())
+            .or_insert_with(String::new)
+            .push_str(&cookie.to_header_value());
+    }
+    
+    /// Delete a cookie by setting it to expire immediately
+    /// 
+    /// # Example
+    /// 
+    /// ```
+    /// response.delete_cookie("session_id");
+    /// ```
+    pub fn delete_cookie(&mut self, name: &str) {
+        let cookie = crate::Cookie::new(name, "")
+            .max_age(0)
+            .path("/");
+        self.set_cookie(cookie);
+    }
 }
 
 impl Default for Response {

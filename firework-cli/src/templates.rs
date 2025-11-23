@@ -93,7 +93,8 @@ async fn main() {
     let server = routes!();
     
     println!("Server running on http://127.0.0.1:8080");
-    server.listen("127.0.0.1:8080").await.unwrap();
+    server.listen("127.0.0.1:8080").await
+        .expect("Failed to start server");
 }
 "#,
         "api" => r#"use firework::prelude::*;
@@ -144,7 +145,8 @@ async fn main() {
     let server = routes!();
     
     println!("API server listening on http://127.0.0.1:8080");
-    server.listen("127.0.0.1:8080").await.unwrap();
+    server.listen("127.0.0.1:8080").await
+        .expect("Failed to start server");
 }
 "#,
         "fullstack" => r#"use firework::prelude::*;
@@ -193,7 +195,8 @@ async fn main() {
     let server = routes!();
     
     println!("Server listening on http://127.0.0.1:8080");
-    server.listen("127.0.0.1:8080").await.unwrap();
+    server.listen("127.0.0.1:8080").await
+        .expect("Failed to start server");
 }
 "#,
         _ => panic!("Unknown template"),

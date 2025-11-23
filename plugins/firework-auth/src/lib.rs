@@ -59,7 +59,7 @@ impl Claims {
     pub fn expires_in_hours(mut self, hours: i64) -> Self {
         let exp_time = chrono::Utc::now()
             .checked_add_signed(chrono::Duration::hours(hours))
-            .unwrap()
+            .expect("Invalid expiration time calculation - check system clock")
             .timestamp() as usize;
         self.exp = exp_time;
         self

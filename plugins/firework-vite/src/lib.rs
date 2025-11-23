@@ -71,6 +71,53 @@ impl VitePlugin {
             ),
         }
     }
+    
+    /// Auto-configure and register Vite plugin (ONE-LINER MAGIC!)
+    /// 
+    /// This is the easiest way to use Vite with Firework:
+    /// ```rust
+    /// VitePlugin::auto();
+    /// 
+    /// routes!()
+    ///     .listen("127.0.0.1:8080")
+    ///     .await
+    ///     .unwrap();
+    /// ```
+    /// 
+    /// Features:
+    /// - Auto-detects frontend directory (frontend/, client/, app/, etc.)
+    /// - Auto-starts Vite dev server on :5173
+    /// - Auto-proxies non-API requests to Vite
+    /// - Auto-configures HMR WebSocket
+    /// - Auto-installs npm dependencies if needed
+    pub fn auto() -> Arc<Self> {
+        let frontend_dir = Self::detect_frontend_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("./frontend"));
+        
+        let config = ViteConfig {
+            root: frontend_dir.clone(),
+            out_dir: frontend_dir.join("dist"),
+            ..Default::default()
+        };
+        
+        let plugin = Arc::new(Self::with_config(config));
+        firework::register_plugin(plugin.clone());
+        
+        println!("[Vite] ✅ Auto-configured (frontend: {})", frontend_dir.display());
+        
+        plugin
+    }
+    
+    /// Detect frontend directory automatically
+    fn detect_frontend_dir() -> Option<std::path::PathBuf> {
+        for dir in ["frontend", "client", "app", "ui", "web", "www"] {
+            let path = std::path::PathBuf::from(format!("./{}", dir));
+            if path.join("package.json").exists() || path.join("vite.config.js").exists() {
+                return Some(path);
+            }
+        }
+        None
+    }
 
     /// Create Vite plugin with custom config
     pub fn with_config(config: ViteConfig) -> Self {
@@ -198,6 +245,170 @@ impl VitePlugin {
     pub fn is_production(&self) -> bool {
         self.is_production
     }
+    
+    /// Proxy a request to Vite dev server
+    async fn proxy_request(&self, req: &Request) -> Result<Option<Response>> {
+        // Build full URL with query string
+        let query_string = if let Some(query) = &req.uri.query {
+            let params: Vec<String> = query
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            if !params.is_empty() {
+                format!("?{}", params.join("&"))
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        
+        let vite_url = format!("{}{}{}", self.dev_url(), req.uri.path, query_string);
+
+        // Use cached HTTP client
+        let client = &self.http_client;
+        
+        // Build request with proper method
+        let proxy_req = match req.method {
+            firework::Method::GET => client.get(&vite_url),
+            firework::Method::POST => client.post(&vite_url).body(req.body.clone()),
+            firework::Method::PUT => client.put(&vite_url).body(req.body.clone()),
+            firework::Method::DELETE => client.delete(&vite_url),
+            firework::Method::PATCH => client.patch(&vite_url).body(req.body.clone()),
+            _ => client.get(&vite_url),
+        };
+
+        match proxy_req.send().await {
+            Ok(response) => {
+                let status_code = response.status().as_u16();
+                let headers = response.headers().clone();
+                
+                match response.bytes().await {
+                    Ok(body) => {
+                        let status = match status_code {
+                            200 => StatusCode::Ok,
+                            404 => StatusCode::NotFound,
+                            code => StatusCode::Custom(code, "Vite".to_string()),
+                        };
+
+                        let mut new_res = Response::new(status, body.to_vec());
+
+                        // Copy headers FIRST (preserves Content-Type)
+                        for (key, value) in headers.iter() {
+                            if let Ok(v) = value.to_str() {
+                                new_res.headers.insert(key.to_string(), v.to_string());
+                            }
+                        }
+                        
+                        // Ensure Content-Type from Vite is preserved
+                        if let Some(ct) = headers.get("content-type") {
+                            if let Ok(v) = ct.to_str() {
+                                new_res.headers.insert("Content-Type".to_string(), v.to_string());
+                            }
+                        }
+
+                        Ok(Some(new_res))
+                    }
+                    Err(_) => Ok(None),
+                }
+            }
+            Err(_) => Ok(None),
+        }
+    }
+    
+    /// Auto-install npm dependencies if needed
+    async fn auto_install_dependencies(&self) -> PluginResult<()> {
+        let package_json = self.config.root.join("package.json");
+        let node_modules = self.config.root.join("node_modules");
+        
+        if package_json.exists() && !node_modules.exists() {
+            println!("[Vite] 📦 Installing frontend dependencies...");
+            
+            let status = Command::new("npm")
+                .args(&["install"])
+                .current_dir(&self.config.root)
+                .spawn()
+                .map_err(|e| PluginError(format!("Failed to spawn npm: {}", e)))?
+                .wait()
+                .await
+                .map_err(|e| PluginError(format!("npm install failed: {}", e)))?;
+            
+            if status.success() {
+                println!("[Vite] ✅ Dependencies installed");
+            } else {
+                eprintln!("[Vite] ⚠️  npm install had errors, continuing anyway...");
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Ensure HMR configuration in vite.config.js
+    async fn ensure_hmr_config(&self) -> PluginResult<()> {
+        let config_path = self.config.root.join("vite.config.js");
+        
+        if !config_path.exists() {
+            return Ok(());
+        }
+        
+        let content = tokio::fs::read_to_string(&config_path)
+            .await
+            .map_err(|e| PluginError(format!("Failed to read vite.config.js: {}", e)))?;
+        
+        // Check if HMR is already configured
+        if content.contains("hmr:") || content.contains("clientPort") {
+            return Ok(());
+        }
+        
+        // Auto-patch vite.config.js
+        let patched = self.inject_hmr_config(&content);
+        
+        tokio::fs::write(&config_path, patched)
+            .await
+            .map_err(|e| PluginError(format!("Failed to write vite.config.js: {}", e)))?;
+        
+        println!("[Vite] ✅ Auto-configured HMR in vite.config.js");
+        
+        Ok(())
+    }
+    
+    /// Inject HMR config into vite.config.js
+    fn inject_hmr_config(&self, content: &str) -> String {
+        // Simple pattern matching to inject HMR config
+        if let Some(pos) = content.find("server: {") {
+            let before = &content[..pos + 9]; // "server: {"
+            let after = &content[pos + 9..];
+            
+            format!(
+                "{}
+    port: 5173,
+    host: '0.0.0.0',
+    hmr: {{
+      clientPort: 5173,
+      host: 'localhost',
+    }},{}",
+                before, after
+            )
+        } else if let Some(pos) = content.find("export default defineConfig({") {
+            let before = &content[..pos + 29];
+            let after = &content[pos + 29..];
+            
+            format!(
+                "{}
+  server: {{
+    port: 5173,
+    host: '0.0.0.0',
+    hmr: {{
+      clientPort: 5173,
+      host: 'localhost',
+    }},
+  }},{}",
+                before, after
+            )
+        } else {
+            content.to_string()
+        }
+    }
 }
 
 impl Default for VitePlugin {
@@ -239,7 +450,18 @@ impl Plugin for VitePlugin {
         // Check if frontend directory exists
         if !self.config.root.exists() {
             eprintln!("[Vite] Warning: Frontend directory not found: {}", self.config.root.display());
-            eprintln!("[Vite] Run: firework init frontend");
+            eprintln!("[Vite] Run: npm create vite@latest {} -- --template react", self.config.root.display());
+            return Ok(());
+        }
+        
+        // Auto-install dependencies if needed
+        if !self.is_production {
+            self.auto_install_dependencies().await?;
+        }
+        
+        // Auto-configure HMR in vite.config.js
+        if !self.is_production {
+            self.ensure_hmr_config().await?;
         }
 
         Ok(())
@@ -255,6 +477,29 @@ impl Plugin for VitePlugin {
         }
 
         Ok(())
+    }
+    
+    /// AUTO-PROXY MAGIC! This intercepts requests and proxies to Vite
+    async fn on_request(&self, req: &mut Request, _res: &mut Response) -> PluginResult<Option<Response>> {
+        // Skip API routes
+        if req.uri.path.starts_with("/api") {
+            return Ok(None);
+        }
+        
+        // In production, let static file serving handle it
+        if self.is_production() {
+            return Ok(None);
+        }
+        
+        // Proxy to Vite dev server
+        match self.proxy_request(req).await {
+            Ok(Some(response)) => Ok(Some(response)),
+            Ok(None) => Ok(None),
+            Err(e) => {
+                eprintln!("[Vite] Proxy error: {}", e);
+                Ok(None)
+            }
+        }
     }
 
     async fn on_shutdown(&self) -> PluginResult<()> {
@@ -344,10 +589,17 @@ pub async fn vite_middleware(
 
                     let mut new_res = Response::new(status, body.to_vec());
 
-                    // Copy headers
+                    // Copy headers FIRST (this will set Content-Type before server adds default)
                     for (key, value) in headers.iter() {
                         if let Ok(v) = value.to_str() {
                             new_res.headers.insert(key.to_string(), v.to_string());
+                        }
+                    }
+                    
+                    // Ensure Content-Type from Vite is preserved
+                    if let Some(ct) = headers.get("content-type") {
+                        if let Ok(v) = ct.to_str() {
+                            new_res.headers.insert("Content-Type".to_string(), v.to_string());
                         }
                     }
 
@@ -407,6 +659,37 @@ pub async fn serve_vite_assets(
             Flow::Stop(new_res)
         }
         Err(_) => Flow::Continue,
+    }
+}
+
+/// Helper to add Vite middleware to server automatically
+/// 
+/// This function creates an async middleware closure that:
+/// - In development: Proxies requests to Vite dev server (5173)
+/// - In production: Serves static assets from dist/
+/// 
+/// # Example
+/// ```rust
+/// use firework_vite::{VitePlugin, vite_auto_middleware};
+/// use std::sync::Arc;
+/// 
+/// let vite = Arc::new(VitePlugin::new());
+/// firework::register_plugin(vite.clone());
+/// 
+/// firework::routes!()
+///     .async_middleware(vite_auto_middleware(vite))
+///     .listen("127.0.0.1:8080")
+///     .await
+///     .unwrap();
+/// ```
+pub fn vite_auto_middleware(
+    vite: Arc<VitePlugin>,
+) -> impl for<'a> Fn(&'a mut Request, &'a mut Response) -> std::pin::Pin<Box<dyn std::future::Future<Output = Flow> + Send + 'a>> + Clone + Send + Sync + 'static {
+    move |req: &mut Request, res: &mut Response| {
+        let vite = vite.clone();
+        Box::pin(async move {
+            vite_middleware(req, res, &vite).await
+        })
     }
 }
 
