@@ -178,6 +178,8 @@ async fn create_user(
 
 ### Read
 
+#### Manual Queries with DbConn
+
 ```rust
 use sea_orm::EntityTrait;
 
@@ -190,7 +192,7 @@ async fn list_users(DbConn(db): DbConn) -> Response {
     }
 }
 
-// Find by ID
+// Find by ID (manual approach)
 #[get("/users/:id")]
 async fn get_user(Path(id): Path<i32>, DbConn(db): DbConn) -> Response {
     match users::Entity::find_by_id(id).one(&db).await {
@@ -215,6 +217,278 @@ async fn search_users(
         Ok(users) => json!(users),
         Err(e) => firework_seaorm::helpers::db_error_to_response(e)
     }
+}
+```
+
+#### Automatic Entity Fetching with DbEntity
+
+**DbEntity is a powerful extractor that automatically fetches entities from the database based on route parameters.**
+
+##### Basic Usage
+
+Instead of manually extracting the ID and querying the database, use `DbEntity<M>`:
+
+```rust
+#[get("/users/:id")]
+async fn get_user(
+    DbEntity(user): DbEntity<users::Model>
+) -> Json<users::Model> {
+    // User is already fetched and validated
+    // Returns 404 automatically if not found
+    Json(user)
+}
+```
+
+This single line replaces:
+1. Extracting `:id` from path parameters
+2. Parsing it to the correct type
+3. Querying the database
+4. Handling not found (404)
+5. Handling database errors (500)
+
+##### How It Works
+
+`DbEntity<M>` extraction follows these steps:
+
+1. **Parameter Detection** - Tries to find the ID parameter in this order:
+   - `:id` (most common)
+   - `:entity_id` (e.g., `:user_id` for `users::Model`)
+   - `:entity_name` (e.g., `:user` for `users::Model`)
+
+2. **Type Parsing** - Parses the parameter to the entity's primary key type
+   - Returns 400 Bad Request if parsing fails
+
+3. **Database Query** - Executes `Entity::find_by_id(pk).one(&db)`
+   - Uses the global database connection (zero overhead)
+
+4. **Error Handling**:
+   - Returns 404 if entity not found
+   - Returns 500 for database errors
+
+##### Multiple Entities
+
+You can fetch multiple entities in a single route:
+
+```rust
+#[get("/users/:user_id/posts/:id")]
+async fn get_user_post(
+    DbEntity(user): DbEntity<users::Model>,    // Uses :user_id
+    DbEntity(post): DbEntity<posts::Model>,    // Uses :id
+) -> Response {
+    // Both entities are fetched and validated
+    // Automatically returns 404 if either is not found
+    
+    json!({
+        "user": user,
+        "post": post
+    })
+}
+```
+
+##### Custom Parameter Names
+
+Use the `#[param("name")]` attribute to specify which parameter to use:
+
+```rust
+#[get("/posts/:post_id/comments/:comment_id")]
+async fn get_comment(
+    #[param("post_id")] DbEntity(post): DbEntity<posts::Model>,
+    #[param("comment_id")] DbEntity(comment): DbEntity<comments::Model>,
+) -> Response {
+    // Verify comment belongs to post
+    if comment.post_id != post.id {
+        return Response::new(StatusCode::NotFound, vec![])
+            .json(json!({"error": "Comment not found in this post"}));
+    }
+    
+    json!(comment)
+}
+```
+
+##### Deref Access
+
+`DbEntity<M>` implements `Deref` and `DerefMut`, so you can access fields directly:
+
+```rust
+#[get("/users/:id")]
+async fn get_user_name(
+    DbEntity(user): DbEntity<users::Model>
+) -> String {
+    // Access fields directly without .0
+    format!("User: {}", user.username)
+}
+
+#[put("/users/:id")]
+async fn update_user(
+    mut DbEntity(mut user): DbEntity<users::Model>,
+    Json(data): Json<UpdateUserDto>,
+    DbConn(db): DbConn,
+) -> Response {
+    // Modify fields directly
+    user.username = data.username;
+    user.email = data.email;
+    
+    // Convert to ActiveModel and save
+    let mut active: users::ActiveModel = user.into();
+    match active.update(&db).await {
+        Ok(updated) => json!(updated),
+        Err(e) => firework_seaorm::helpers::db_error_to_response(e)
+    }
+}
+```
+
+##### DbEntityOpt - Optional Entities
+
+Use `DbEntityOpt<M>` when you want to handle missing entities yourself instead of automatic 404:
+
+```rust
+#[get("/users/:id")]
+async fn get_user_optional(
+    DbEntityOpt(user): DbEntityOpt<users::Model>
+) -> Response {
+    match user {
+        Some(user) => json!(user),
+        None => json!({
+            "error": "User not found",
+            "suggestion": "Create a new account"
+        })
+    }
+}
+
+#[get("/posts/:id/author")]
+async fn get_post_author(
+    DbEntity(post): DbEntity<posts::Model>,
+    DbEntityOpt(author): DbEntityOpt<users::Model>,
+) -> Response {
+    json!({
+        "post": post,
+        "author": author.unwrap_or_else(|| users::Model {
+            id: 0,
+            username: "Deleted User".to_string(),
+            // ... default values
+        })
+    })
+}
+```
+
+##### Complex Example - Nested Resources
+
+```rust
+#[get("/organizations/:org_id/teams/:team_id/members/:id")]
+async fn get_team_member(
+    #[param("org_id")] DbEntity(org): DbEntity<organizations::Model>,
+    #[param("team_id")] DbEntity(team): DbEntity<teams::Model>,
+    DbEntity(member): DbEntity<users::Model>,
+    DbConn(db): DbConn,
+) -> Response {
+    // All three entities are automatically fetched
+    // Returns 404 if any is missing
+    
+    // Verify relationships
+    if team.organization_id != org.id {
+        return Response::new(StatusCode::NotFound, vec![])
+            .json(json!({"error": "Team not in organization"}));
+    }
+    
+    // Check membership
+    let is_member = team_members::Entity::find()
+        .filter(team_members::Column::TeamId.eq(team.id))
+        .filter(team_members::Column::UserId.eq(member.id))
+        .one(&db)
+        .await
+        .unwrap()
+        .is_some();
+    
+    if !is_member {
+        return Response::new(StatusCode::NotFound, vec![])
+            .json(json!({"error": "User not in team"}));
+    }
+    
+    json!({
+        "organization": org.name,
+        "team": team.name,
+        "member": member
+    })
+}
+```
+
+##### Performance Considerations
+
+1. **Zero Overhead Connection**: Uses global `OnceCell<Arc<DatabaseConnection>>`
+2. **Single Query**: Each `DbEntity` executes one `SELECT * WHERE id = ?` query
+3. **No Caching**: Entities are fetched fresh on each request
+4. **N+1 Prevention**: Use `firework-dataloader` for bulk operations
+
+##### Error Handling
+
+`DbEntity` returns different errors:
+
+```rust
+// 400 Bad Request - Invalid ID format
+GET /users/abc  // When ID should be integer
+
+// 404 Not Found - Entity doesn't exist
+GET /users/99999
+
+// 500 Internal Server Error - Database error
+GET /users/1  // When database is down
+```
+
+Custom error handling:
+
+```rust
+// Use DbEntityOpt to handle errors yourself
+#[get("/users/:id")]
+async fn get_user_custom_error(
+    DbEntityOpt(user): DbEntityOpt<users::Model>
+) -> Response {
+    match user {
+        Some(user) => json!(user),
+        None => Response::new(StatusCode::NotFound, vec![])
+            .json(json!({
+                "error": "USER_NOT_FOUND",
+                "code": 404,
+                "message": "The requested user does not exist"
+            }))
+    }
+}
+```
+
+##### When to Use DbEntity vs DbConn
+
+**Use DbEntity when:**
+- Fetching a single entity by ID from URL parameters
+- You want automatic 404 handling
+- Simple CRUD operations on individual resources
+
+**Use DbConn when:**
+- Complex queries with filters, joins, or aggregations
+- Listing/searching multiple entities
+- Custom SQL or raw queries
+- Transactions with multiple operations
+
+```rust
+// Good use of DbEntity
+#[get("/users/:id")]
+async fn get_user(DbEntity(user): DbEntity<users::Model>) -> Json<users::Model> {
+    Json(user)
+}
+
+// Good use of DbConn
+#[get("/users")]
+async fn list_users(
+    Query(params): Query<PaginationParams>,
+    DbConn(db): DbConn
+) -> Response {
+    let users = users::Entity::find()
+        .filter(users::Column::Active.eq(true))
+        .order_by_desc(users::Column::CreatedAt)
+        .paginate(&db, params.per_page)
+        .fetch_page(params.page)
+        .await
+        .unwrap();
+    
+    json!(users)
 }
 ```
 
