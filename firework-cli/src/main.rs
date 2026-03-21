@@ -17,38 +17,38 @@ enum Commands {
     New {
         #[arg(help = "Project name")]
         name: String,
-        
+
         #[arg(short, long, help = "Use a template (basic, api, fullstack)")]
         template: Option<String>,
     },
-    
+
     #[command(about = "Run in development mode with hot reload")]
     Dev,
-    
+
     #[command(about = "List all registered routes")]
     Routes {
         #[arg(short, long, help = "Show only routes matching pattern")]
         filter: Option<String>,
-        
+
         #[arg(short, long, help = "Show detailed route information")]
         verbose: bool,
-        
+
         #[arg(short, long, help = "Export routes to format (openapi, markdown)")]
         export: Option<String>,
-        
+
         #[arg(short, long, help = "Check for route conflicts")]
         check: bool,
-        
+
         #[arg(short, long, help = "Show route statistics")]
         stats: bool,
     },
-    
+
     #[command(about = "Create configuration file")]
     Create {
         #[command(subcommand)]
         resource: CreateResource,
     },
-    
+
     #[command(about = "Run various tasks")]
     Run {
         #[command(subcommand)]
@@ -69,13 +69,13 @@ enum RunTask {
         #[arg(long, help = "Enable hot reload")]
         hot_reload: bool,
     },
-    
+
     #[command(about = "Build for release")]
     Release,
-    
+
     #[command(about = "Build the project")]
     Build,
-    
+
     #[command(about = "Run a custom script from Firework.toml")]
     Script {
         #[arg(help = "Script name")]
@@ -85,7 +85,7 @@ enum RunTask {
 
 fn main() {
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::New { name, template } => {
             commands::new_project(&name, template.as_deref());
@@ -93,7 +93,13 @@ fn main() {
         Commands::Dev => {
             commands::run_dev(true); // Always enable hot reload for dev alias
         }
-        Commands::Routes { filter, verbose, export, check, stats } => {
+        Commands::Routes {
+            filter,
+            verbose,
+            export,
+            check,
+            stats,
+        } => {
             commands::list_routes(filter.as_deref(), verbose, export.as_deref(), check, stats);
         }
         Commands::Create { resource } => match resource {

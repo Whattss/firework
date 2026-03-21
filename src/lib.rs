@@ -1,3 +1,11 @@
+// Use jemalloc as the global allocator for better performance
+#[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 mod config;
 mod cookie;
 mod error;

@@ -1,4 +1,4 @@
-use crate::{Method, Request, Response, Router, Server, Uri, Version, Flow, Middleware};
+use crate::{Method, Request, Response, Router, Server, Uri, Version, Flow, Middleware, AsyncMiddleware};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -6,6 +6,7 @@ use std::sync::Arc;
 pub struct TestClient {
     router: Arc<Router>,
     middlewares: Vec<Middleware>,
+    async_middlewares: Vec<AsyncMiddleware>,
 }
 
 impl TestClient {
@@ -14,6 +15,7 @@ impl TestClient {
         Self {
             router: Arc::new(server.router),
             middlewares: server.middlewares,
+            async_middlewares: server.async_middlewares,
         }
     }
 
@@ -47,7 +49,7 @@ impl TestClient {
         let mut response = Response::default();
         let mut stopped = false;
 
-        // Apply middlewares
+        // Apply sync middlewares
         for mw in &self.middlewares {
             match mw(&mut request, &mut response) {
                 Flow::Stop(final_res) => {
@@ -59,19 +61,31 @@ impl TestClient {
             }
         }
 
-        // If middleware stopped, return that response
-        if stopped {
-            return TestResponse::new(response);
+        // Apply async middlewares
+        if !stopped {
+            for mw in &self.async_middlewares {
+                match mw(&mut request, &mut response).await {
+                    Flow::Stop(final_res) => {
+                        response = final_res;
+                        stopped = true;
+                        break;
+                    }
+                    Flow::Continue => {}
+                }
+            }
         }
 
         // Find route handler
-        if let Some((handler, params)) = self.router.find(&request.method, &request.uri.path) {
-            request.params = params;
-            response = handler.call(request, response).await;
-            TestResponse::new(response)
-        } else {
-            TestResponse::new(Response::new(crate::response::StatusCode::NotFound, b"Not Found"))
+        if !stopped {
+            if let Some((handler, params)) = self.router.find(&request.method, &request.uri.path) {
+                request.params = params;
+                response = handler.call(request, response).await;
+            } else {
+                response = Response::new(crate::response::StatusCode::NotFound, b"Not Found");
+            }
         }
+
+        TestResponse::new(response)
     }
 }
 

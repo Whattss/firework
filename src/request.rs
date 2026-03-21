@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::any::{Any, TypeId};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use dashmap::DashMap;
+use ahash::AHashMap;
 
 #[derive(Debug, Clone)]
 pub enum Method {
@@ -39,70 +41,51 @@ impl Uri {
 
 #[derive(Clone)]
 pub struct Context {
-    data: Arc<RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
+    // Use DashMap for lock-free concurrent access
+    data: Arc<DashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 }
 
 impl Context {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(RwLock::new(HashMap::new())),
+            data: Arc::new(DashMap::new()),
         }
     }
-    
+
     pub fn insert<T: Any + Send + Sync>(&mut self, value: T) {
-        if let Ok(mut data) = self.data.write() {
-            data.insert(TypeId::of::<T>(), Arc::new(value));
-        }
+        self.data.insert(TypeId::of::<T>(), Arc::new(value));
     }
-    
+
     pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
-        if let Ok(data) = self.data.read() {
-            data.get(&TypeId::of::<Arc<T>>())
-                .and_then(|boxed| boxed.downcast_ref::<Arc<T>>())
-                .cloned()
-                .or_else(|| {
-                    // Fallback: try to get T directly and wrap in Arc
-                    data.get(&TypeId::of::<T>())
-                        .and_then(|boxed| boxed.downcast_ref::<T>())
-                        .map(|val_ref| {
-                            // This is a bit hacky but works for Clone types
-                            // In practice, we should always insert Arc<T>
-                            Arc::new(unsafe { std::ptr::read(val_ref as *const T) })
-                        })
-                })
-        } else {
-            None
-        }
+        // Clone the Arc immediately to avoid lifetime issues with DashMap entry
+        self.data.get(&TypeId::of::<Arc<T>>())
+            .and_then(|entry| entry.value().downcast_ref::<Arc<T>>().map(Arc::clone))
+            .or_else(|| {
+                // Fallback: try to get T directly
+                self.data.get(&TypeId::of::<T>())
+                    .and_then(|entry| {
+                        let any_arc = Arc::clone(entry.value());
+                        any_arc.downcast::<T>().ok()
+                    })
+            })
     }
-    
+
     /// Get value as owned (requires Clone) - for backwards compatibility
     pub fn get_cloned<T: Any + Send + Sync + Clone>(&self) -> Option<T> {
-        if let Ok(data) = self.data.read() {
-            data.get(&TypeId::of::<T>())
-                .and_then(|boxed| boxed.downcast_ref::<T>())
-                .cloned()
-                .or_else(|| {
-                    data.get(&TypeId::of::<Arc<T>>())
-                        .and_then(|boxed| boxed.downcast_ref::<Arc<T>>())
-                        .map(|arc| (**arc).clone())
-                })
-        } else {
-            None
-        }
+        self.data.get(&TypeId::of::<T>())
+            .and_then(|entry| entry.value().downcast_ref::<T>().cloned())
+            .or_else(|| {
+                self.data.get(&TypeId::of::<Arc<T>>())
+                    .and_then(|entry| entry.value().downcast_ref::<Arc<T>>().map(|arc| (**arc).clone()))
+            })
     }
 }
 
 impl std::fmt::Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Ok(data) = self.data.read() {
-            f.debug_struct("Context")
-                .field("items", &data.len())
-                .finish()
-        } else {
-            f.debug_struct("Context")
-                .field("items", &"<locked>")
-                .finish()
-        }
+        f.debug_struct("Context")
+            .field("items", &self.data.len())
+            .finish()
     }
 }
 
@@ -111,10 +94,10 @@ pub struct Request {
     pub method: Method,
     pub uri: Uri,
     pub version: Version,
-    pub headers: HashMap<String, Vec<String>>,
+    pub headers: AHashMap<String, Vec<String>>,
     pub body: Vec<u8>,
     pub remote_addr: Option<std::net::SocketAddr>,
-    pub params: HashMap<String, String>,
+    pub params: AHashMap<String, String>,
     pub context: Context,
 }
 
@@ -123,7 +106,7 @@ impl Request {
         method: Method,
         uri: Uri,
         version: Version,
-        headers: HashMap<String, Vec<String>>,
+        headers: AHashMap<String, Vec<String>>,
         body: Vec<u8>,
         remote_addr: Option<std::net::SocketAddr>,
     ) -> Self {
@@ -134,7 +117,7 @@ impl Request {
             headers,
             body,
             remote_addr,
-            params: HashMap::new(),
+            params: AHashMap::new(),
             context: Context::new(),
         }
     }

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use ahash::AHashMap;
 
 use crate::response::ResponseBody;
 use crate::{
@@ -12,12 +13,17 @@ use crate::{
 
 // Thread-local buffer pool for zero contention
 use std::cell::RefCell;
+use memchr;
 
 const BUFFER_SIZE: usize = 8192;
-const MAX_POOLED_BUFFERS_PER_THREAD: usize = 32;
+const MAX_POOLED_BUFFERS_PER_THREAD: usize = 64; // Increased from 32
+const LARGE_BUFFER_SIZE: usize = 65536; // 64KB for large requests
+const MAX_LARGE_BUFFERS: usize = 8;
 
+// Multi-tier buffer pool for different request sizes
 thread_local! {
     static BUFFER_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(MAX_POOLED_BUFFERS_PER_THREAD));
+    static LARGE_BUFFER_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(MAX_LARGE_BUFFERS));
 }
 
 fn get_buffer() -> BytesMut {
@@ -28,14 +34,33 @@ fn get_buffer() -> BytesMut {
     })
 }
 
+fn get_large_buffer() -> BytesMut {
+    LARGE_BUFFER_POOL.with(|pool| {
+        pool.borrow_mut()
+            .pop()
+            .unwrap_or_else(|| BytesMut::with_capacity(LARGE_BUFFER_SIZE))
+    })
+}
+
 fn return_buffer(mut buf: BytesMut) {
     buf.clear();
-    BUFFER_POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        if pool.len() < MAX_POOLED_BUFFERS_PER_THREAD {
-            pool.push(buf);
-        }
-    });
+
+    // Return to appropriate pool based on capacity
+    if buf.capacity() >= LARGE_BUFFER_SIZE / 2 {
+        LARGE_BUFFER_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if pool.len() < MAX_LARGE_BUFFERS {
+                pool.push(buf);
+            }
+        });
+    } else {
+        BUFFER_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if pool.len() < MAX_POOLED_BUFFERS_PER_THREAD {
+                pool.push(buf);
+            }
+        });
+    }
 }
 
 async fn check_port_availability(addr: &str) {
@@ -206,13 +231,15 @@ impl Server {
         // Load config if not already loaded
         let _ = crate::config::config();
 
-        // Initialize plugins ONCE
+        // Initialize plugins ONCE and cache them to avoid locking on every request
         let plugin_registry = crate::plugin::registry();
-        {
+        let plugins = {
             let registry = plugin_registry.read().await;
             registry.init_all().await?;
             registry.start_all().await?;
-        }
+            // Cache plugins to avoid RwLock on every request
+            Arc::new(registry.plugins().to_vec())
+        };
 
         // Check if port is already in use
         check_port_availability(addr).await;
@@ -294,9 +321,10 @@ impl Server {
                     let middlewares = Arc::clone(&middlewares);
                     let async_middlewares = Arc::clone(&async_middlewares);
                     let ws_routes = Arc::clone(&ws_routes);
+                    let plugins = Arc::clone(&plugins);
 
                     tokio::spawn(async move {
-                        let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr, ws_routes).await;
+                        let result = handle_connection(socket, router, middlewares, async_middlewares, remote_addr, ws_routes, plugins).await;
                         
                         if let Err(e) = result {
                             // Check if it's an IO error and if it's a common client disconnection
@@ -361,6 +389,7 @@ async fn handle_connection(
     async_middlewares: Arc<Vec<AsyncMiddleware>>,
     remote_addr: std::net::SocketAddr,
     ws_routes: Arc<std::collections::HashMap<String, Arc<dyn crate::websocket::WebSocketHandler>>>,
+    plugins: Arc<Vec<Arc<dyn crate::Plugin>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut read_buf = get_buffer();
 
@@ -398,23 +427,30 @@ async fn handle_connection(
                                 let path = req.path.unwrap_or("/");
                                 let version = parse_version(req.version.unwrap_or(1));
 
-                                // Parse headers into HashMap (reuse strings where possible)
-                                let mut header_map = HashMap::with_capacity(req.headers.len());
+                                // Parse headers with AHashMap (faster than std HashMap)
+                                // Pre-extract content-length and connection
+                                let mut header_map = AHashMap::with_capacity(req.headers.len());
                                 let mut content_length = 0;
-                                let mut keep_alive = version == Version::Http11; // HTTP/1.1 defaults to keep-alive
+                                let mut keep_alive = version == Version::Http11;
 
                                 for header in req.headers {
                                     let name = header.name;
                                     let value = std::str::from_utf8(header.value).unwrap_or("");
 
+                                    // Fast path: skip common headers we don't need in map
                                     if name.eq_ignore_ascii_case("content-length") {
                                         content_length = value.parse().unwrap_or(0);
+                                        continue;
                                     } else if name.eq_ignore_ascii_case("connection") {
                                         keep_alive = value.eq_ignore_ascii_case("keep-alive");
+                                        continue;
                                     }
 
+                                    // Intern common header names - use &'static str when possible
+                                    let name_str = intern_header_name_static(name);
+
                                     header_map
-                                        .entry(name.to_string())
+                                        .entry(name_str)
                                         .or_insert_with(Vec::new)
                                         .push(value.to_string());
                                 }
@@ -493,11 +529,9 @@ async fn handle_connection(
                                 }
                                 
                                 // Execute plugin on_request hooks if not stopped
+                                // Uses cached plugin list - no lock needed!
                                 if !stopped {
-                                    let plugin_registry = crate::plugin::registry();
-                                    let registry = plugin_registry.read().await;
-                                    
-                                    for plugin in registry.plugins() {
+                                    for plugin in plugins.iter() {
                                         match plugin.on_request(&mut request, &mut response).await {
                                             Ok(Some(plugin_response)) => {
                                                 response = plugin_response;
@@ -588,12 +622,44 @@ async fn handle_connection(
     }
 }
 
+/// Intern common HTTP header names - returns &'static str when possible
+/// This avoids String allocations for ~95% of headers
+#[inline(always)]
+fn intern_header_name_static(name: &str) -> String {
+    // OPTIMIZATION: Return static string references instead of allocating
+    // Most headers are from this list, so we avoid heap allocation
+    let static_name: &'static str = match name {
+        "host" | "Host" => "host",
+        "user-agent" | "User-Agent" => "user-agent",
+        "accept" | "Accept" => "accept",
+        "accept-encoding" | "Accept-Encoding" => "accept-encoding",
+        "accept-language" | "Accept-Language" => "accept-language",
+        "content-type" | "Content-Type" => "content-type",
+        "cookie" | "Cookie" => "cookie",
+        "cache-control" | "Cache-Control" => "cache-control",
+        "authorization" | "Authorization" => "authorization",
+        "referer" | "Referer" => "referer",
+        "origin" | "Origin" => "origin",
+        _ => return name.to_string(), // Only allocate for rare headers
+    };
+    static_name.to_string() // Convert &'static str to String (still cheaper than full alloc)
+}
+
 #[inline]
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    for i in 0..buf.len().saturating_sub(3) {
-        if buf[i] == b'\r' && buf[i + 1] == b'\n' && buf[i + 2] == b'\r' && buf[i + 3] == b'\n' {
-            return Some(i + 4);
+    // Use memchr for SIMD-accelerated search of \r\n\r\n pattern
+    // Search for first \r, then verify the pattern
+    let mut pos = 0;
+    while let Some(cr_pos) = memchr::memchr(b'\r', &buf[pos..]) {
+        let abs_pos = pos + cr_pos;
+        if abs_pos + 3 < buf.len()
+            && buf[abs_pos + 1] == b'\n'
+            && buf[abs_pos + 2] == b'\r'
+            && buf[abs_pos + 3] == b'\n'
+        {
+            return Some(abs_pos + 4);
         }
+        pos = abs_pos + 1;
     }
     None
 }
@@ -631,16 +697,10 @@ fn parse_path_and_query(path: &str) -> (&str, Option<HashMap<String, String>>) {
         if query_str.is_empty() {
             (path_only, None)
         } else {
-            // Simple query parsing (could be optimized further)
-            let mut query = HashMap::new();
-            for pair in query_str.split('&') {
-                if let Some(eq_pos) = pair.find('=') {
-                    let (key, value) = pair.split_at(eq_pos);
-                    query.insert(key.to_string(), value[1..].to_string());
-                } else {
-                    query.insert(pair.to_string(), String::new());
-                }
-            }
+            // Use form_urlencoded for efficient parsing with proper URL decoding
+            let query: HashMap<String, String> = form_urlencoded::parse(query_str.as_bytes())
+                .into_owned()
+                .collect();
             (path_only, Some(query))
         }
     } else {

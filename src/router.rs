@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use ahash::AHashMap;
 
 use crate::AsyncHandler;
 use crate::Method;
@@ -64,14 +65,14 @@ impl RadixNode {
         self.children.push(child);
     }
 
-    pub fn search(&self, method: &Method, path: &str) -> Option<(HandlerBox, HashMap<String, String>)> {
+    pub fn search(&self, method: &Method, path: &str) -> Option<(HandlerBox, AHashMap<String, String>)> {
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let method_str = method_to_str(method);
-        let mut params = HashMap::new();
+        let mut params = AHashMap::new();
         self.search_iterative(method_str, &parts, &mut params)
     }
-    
-    fn search_iterative(&self, method: &str, parts: &[&str], params: &mut HashMap<String, String>) -> Option<(HandlerBox, HashMap<String, String>)> {
+
+    fn search_iterative(&self, method: &str, parts: &[&str], params: &mut AHashMap<String, String>) -> Option<(HandlerBox, AHashMap<String, String>)> {
         // Base case
         if parts.is_empty() {
             return self.handlers.get(method).map(|h| (Arc::clone(h), params.clone()));
@@ -140,7 +141,7 @@ impl Router {
         self.root.insert(method, path, handler);
     }
 
-    pub fn find(&self, method: &Method, path: &str) -> Option<(HandlerBox, HashMap<String, String>)> {
+    pub fn find(&self, method: &Method, path: &str) -> Option<(HandlerBox, AHashMap<String, String>)> {
         self.root.search(method, path)
     }
 }
