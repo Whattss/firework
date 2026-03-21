@@ -34,7 +34,7 @@ A blazingly fast, production-ready web framework for Rust with modern features a
 - **CLI Tool**: Project scaffolding, hot reload, route inspection, OpenAPI export
 - **Testing**: Built-in test client for integration testing
 - **Documentation**: Comprehensive guides and examples
-- **Config**: TOML-based configuration system
+- **Config**: `Firework.toml` configuration for server, plugins, and custom options
 
 ## Quick Start
 
@@ -152,6 +152,66 @@ async fn create_user(
 }
 ```
 
+## Configuration
+
+Create a `Firework.toml` file in your project root:
+
+```toml
+[server]
+address = "127.0.0.1"
+port = 8080
+workers = 8
+
+[plugins.seaorm]
+database_url = "sqlite://data.db"
+
+[plugins.auth]
+jwt_secret = "your-secret-key-min-32-characters-long"
+jwt_expiration_hours = 24
+
+[plugins.security]
+frame_options = "DENY"
+hsts_max_age = 31536000
+csp = "default-src 'self'"
+```
+
+Then use it in your code:
+
+```rust
+#[tokio::main]
+async fn main() {
+    let config = firework::init_config().await;
+    
+    let auth = firework_auth::AuthPlugin::from_config().await;
+    firework::register_plugin(std::sync::Arc::new(auth));
+    
+    let addr = format!("{}:{}", config.server.address, config.server.port);
+    routes!().listen(&addr).await.unwrap();
+}
+```
+
+For detailed configuration options, see [Configuration Guide](docs/core/configuration.md).
+
+## Documentation
+
+- [Configuration Guide](docs/core/configuration.md) - Server and plugin configuration
+- [Routing & Handlers](docs/core/routing.md) - Routes, paths, parameters
+- [Request & Response](docs/core/request-response.md) - Extractors, serialization
+- [Middleware](docs/core/middleware.md) - Sync, async, scoped middleware
+- [Extractors](docs/core/extractors.md) - Path, Query, JSON, custom extractors
+- [Error Handling](docs/core/errors.md) - Status codes, error responses
+- [Testing](docs/advanced/testing.md) - Integration testing with TestClient
+- [Hot Reload](docs/advanced/hot-reload.md) - Development mode with state preservation
+- [SeaORM Integration](docs/plugins/seaorm.md) - Database, DbEntity, transactions
+- [Authentication](plugins/firework-auth/README.md) - JWT, Argon2, claims
+- [Security Headers](plugins/firework-security/README.md) - HSTS, CSP, X-Frame-Options
+- [CORS](plugins/firework-cors/README.md) - Cross-origin requests
+- [Compression](plugins/firework-compress/README.md) - Gzip, Brotli
+- [Vite Integration](plugins/firework-vite/README.md) - Frontend with HMR
+- [DataLoader](plugins/firework-dataloader/README.md) - Batch loading, N+1 solving
+- [Proxy](plugins/firework-proxy/README.md) - Reverse proxy, load balancing
+```
+
 ### Production Setup
 
 ```rust
@@ -175,12 +235,64 @@ async fn main() {
 }
 ```
 
+## Configuration
+
+Create a `Firework.toml` file in your project root:
+
+```toml
+[server]
+address = "127.0.0.1"
+port = 8080
+workers = 8
+
+[plugins.seaorm]
+database_url = "sqlite://data.db"
+
+[plugins.auth]
+jwt_secret = "your-secret-key-min-32-characters-long"
+jwt_expiration_hours = 24
+
+[plugins.security]
+frame_options = "DENY"
+hsts_max_age = 31536000
+csp = "default-src 'self'"
+```
+
+Then use it in your code:
+
+```rust
+#[tokio::main]
+async fn main() {
+    let config = firework::init_config().await;
+    
+    let auth = firework_auth::AuthPlugin::from_config().await;
+    firework::register_plugin(std::sync::Arc::new(auth));
+    
+    let addr = format!("{}:{}", config.server.address, config.server.port);
+    routes!().listen(&addr).await.unwrap();
+}
+```
+
+For detailed configuration options, see [Configuration Guide](docs/core/configuration.md).
+
 ## Documentation
 
-- [Getting Started Guide](docs/getting-started/installation.md)
-- [API Reference](docs/api/)
-- [Plugin Development](docs/plugins/custom.md)
-- [Examples](examples/)
+- [Configuration Guide](docs/core/configuration.md) - Server and plugin configuration
+- [Routing & Handlers](docs/core/routing.md) - Routes, paths, parameters
+- [Request & Response](docs/core/request-response.md) - Extractors, serialization
+- [Middleware](docs/core/middleware.md) - Sync, async, scoped middleware
+- [Extractors](docs/core/extractors.md) - Path, Query, JSON, custom extractors
+- [Error Handling](docs/core/errors.md) - Status codes, error responses
+- [Testing](docs/advanced/testing.md) - Integration testing with TestClient
+- [Hot Reload](docs/advanced/hot-reload.md) - Development mode with state preservation
+- [SeaORM Integration](docs/plugins/seaorm.md) - Database, DbEntity, transactions
+- [Authentication](plugins/firework-auth/README.md) - JWT, Argon2, claims
+- [Security Headers](plugins/firework-security/README.md) - HSTS, CSP, X-Frame-Options
+- [CORS](plugins/firework-cors/README.md) - Cross-origin requests
+- [Compression](plugins/firework-compress/README.md) - Gzip, Brotli
+- [Vite Integration](plugins/firework-vite/README.md) - Frontend with HMR
+- [DataLoader](plugins/firework-dataloader/README.md) - Batch loading, N+1 solving
+- [Proxy](plugins/firework-proxy/README.md) - Reverse proxy, load balancing
 
 ## CLI Commands
 
