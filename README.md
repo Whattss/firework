@@ -13,6 +13,7 @@ A blazingly fast, production-ready web framework for Rust with modern features a
 - **Ultra Fast**: 200k+ req/s with optimized routing and connection handling
 - **Hot Reload**: Instant feedback during development with state preservation
 - **Declarative**: Clean `#[get("/path")]` macros with auto-registration
+- **Route Scopes**: Organize routes with `#[scope("/api")]` and middleware
 - **WebSockets**: Built-in WebSocket support with rooms and broadcasting
 - **Type-Safe**: Powerful extractors for Path, Query, JSON, Headers, Forms
 - **Validation**: Input validation with custom validators
@@ -70,6 +71,48 @@ async fn user(Path(id): Path<u32>) -> String {
 async fn main() {
     let server = routes!();
     server.listen("127.0.0.1:8080").await.unwrap();
+}
+```
+
+### Route Scopes & Modules
+
+```rust
+use firework::prelude::*;
+
+// Declarative scopes with middleware
+#[scope("/api", middleware = [auth_middleware])]
+mod api {
+    use super::*;
+
+    #[get("/users")]
+    async fn list_users() -> Response {
+        // Route: /api/users
+        json!({"users": []})
+    }
+
+    #[get("/users/:id")]
+    async fn get_user(Path(id): Path<u32>) -> Response {
+        // Route: /api/users/:id
+        json!({"id": id})
+    }
+
+    // Nested scopes
+    #[scope("/admin", middleware = [admin_middleware])]
+    mod admin {
+        use super::*;
+
+        #[get("/dashboard")]
+        async fn dashboard() -> Response {
+            // Route: /api/admin/dashboard
+            json!({"page": "dashboard"})
+        }
+    }
+}
+
+#[middleware]
+async fn auth_middleware(req: &mut Request, res: &mut Response) -> Flow {
+    // Runs for all /api/* routes
+    Flow::Continue
 }
 ```
 
