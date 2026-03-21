@@ -7,35 +7,35 @@ A blazingly fast, production-ready web framework for Rust with modern features a
 
 **200k+ requests/sec** | Zero-cost abstractions | Plugin architecture | Hot reload
 
-## ✨ Features
+## Features
 
 ### Core Framework
-- 🚀 **Ultra Fast**: 200k+ req/s with optimized routing and connection handling
-- 🔥 **Hot Reload**: Instant feedback during development with state preservation
-- 🎯 **Declarative**: Clean `#[get("/path")]` macros with auto-registration
-- 🔌 **WebSockets**: Built-in WebSocket support with rooms and broadcasting
-- 📦 **Type-Safe**: Powerful extractors for Path, Query, JSON, Headers, Forms
-- ✅ **Validation**: Input validation with custom validators
-- 📤 **File Uploads**: Multipart form handling with size limits and type filtering
-- 🍪 **Cookies**: Full cookie support with HttpOnly, Secure, SameSite
+- **Ultra Fast**: 200k+ req/s with optimized routing and connection handling
+- **Hot Reload**: Instant feedback during development with state preservation
+- **Declarative**: Clean `#[get("/path")]` macros with auto-registration
+- **WebSockets**: Built-in WebSocket support with rooms and broadcasting
+- **Type-Safe**: Powerful extractors for Path, Query, JSON, Headers, Forms
+- **Validation**: Input validation with custom validators
+- **File Uploads**: Multipart form handling with size limits and type filtering
+- **Cookies**: Full cookie support with HttpOnly, Secure, SameSite
 
 ### Official Plugins
-- 🔐 **Auth**: JWT authentication with Argon2 password hashing
-- 🗄️ **SeaORM**: Seamless database integration with connection pooling
-- 🌐 **CORS**: Configurable cross-origin resource sharing
-- 🗜️ **Compression**: Gzip + Brotli compression (70-85% size reduction)
-- 🔒 **Security**: Production-ready security headers (HSTS, CSP, X-Frame-Options)
-- ⚡ **Vite**: Auto-start Vite dev server with HMR proxy
-- 📊 **DataLoader**: Solve N+1 queries with batching and caching
-- 🔄 **Proxy**: Reverse proxy with load balancing
+- **Auth**: JWT authentication with Argon2 password hashing
+- **SeaORM**: Seamless database integration with connection pooling
+- **CORS**: Configurable cross-origin resource sharing
+- **Compression**: Gzip + Brotli compression (70-85% size reduction)
+- **Security**: Production-ready security headers (HSTS, CSP, X-Frame-Options)
+- **Vite**: Auto-start Vite dev server with HMR proxy
+- **DataLoader**: Solve N+1 queries with batching and caching
+- **Proxy**: Reverse proxy with load balancing
 
 ### Developer Experience
-- 📝 **CLI Tool**: Project scaffolding, hot reload, route inspection, OpenAPI export
-- 🧪 **Testing**: Built-in test client for integration testing
-- 📖 **Documentation**: Comprehensive guides and examples
-- 🛠️ **Config**: TOML-based configuration system
+- **CLI Tool**: Project scaffolding, hot reload, route inspection, OpenAPI export
+- **Testing**: Built-in test client for integration testing
+- **Documentation**: Comprehensive guides and examples
+- **Config**: TOML-based configuration system
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -132,14 +132,14 @@ async fn main() {
 }
 ```
 
-## 📚 Documentation
+## Documentation
 
 - [Getting Started Guide](docs/getting-started/installation.md)
 - [API Reference](docs/api/)
 - [Plugin Development](docs/plugins/custom.md)
 - [Examples](examples/)
 
-## 🛠️ CLI Commands
+## CLI Commands
 
 ```bash
 # Create new project
@@ -164,7 +164,7 @@ fwk routes --stats
 fwk run script-name
 ```
 
-## 🔌 Available Plugins
+## Available Plugins
 
 | Plugin | Description | Status |
 |--------|-------------|--------|
@@ -177,7 +177,7 @@ fwk run script-name
 | **firework-dataloader** | N+1 query solving | ✅ Stable |
 | **firework-proxy** | Reverse proxy | ⚠️ Beta |
 
-## 📊 Benchmarks
+## Benchmarks
 
 ```
 Framework: Firework v0.1.0
@@ -191,7 +191,7 @@ With middleware (CORS):   ~160,000 req/s
 
 *Run your own: `cargo run --example benchmark_server --release`*
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 firework/
@@ -220,15 +220,15 @@ firework/
 └── docs/                  # Documentation
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please read our [Contributing Guide](docs/contributing/development.md) first.
 
-## 📜 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🔗 Links
+## Links
 
 - **Documentation**: [docs/](docs/)
 - **Examples**: [examples/](examples/)
