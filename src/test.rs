@@ -1,6 +1,7 @@
 use crate::{Method, Request, Response, Router, Server, Uri, Version, Flow, Middleware, AsyncMiddleware};
 use std::collections::HashMap;
 use std::sync::Arc;
+use ahash::AHashMap;
 
 /// Test client for making requests to the application
 pub struct TestClient {
@@ -94,7 +95,7 @@ pub struct TestRequest<'a> {
     client: &'a TestClient,
     method: Method,
     path: String,
-    headers: HashMap<String, Vec<String>>,
+    headers: AHashMap<String, Vec<String>>,
     body: Vec<u8>,
     query: HashMap<String, String>,
 }
@@ -105,7 +106,7 @@ impl<'a> TestRequest<'a> {
             client,
             method,
             path: path.to_string(),
-            headers: HashMap::new(),
+            headers: AHashMap::new(),
             body: Vec::new(),
             query: HashMap::new(),
         }

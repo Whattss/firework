@@ -1,0 +1,6 @@
+# Keep repository language stats focused on framework source.
+frontend/** linguist-vendored
+examples/**/frontend/** linguist-vendored
+**/node_modules/** linguist-vendored
+**/dist/** linguist-vendored
+**/build/** linguist-vendored

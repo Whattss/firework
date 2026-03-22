@@ -19,6 +19,8 @@ const BUFFER_SIZE: usize = 8192;
 const MAX_POOLED_BUFFERS_PER_THREAD: usize = 64; // Increased from 32
 const LARGE_BUFFER_SIZE: usize = 65536; // 64KB for large requests
 const MAX_LARGE_BUFFERS: usize = 8;
+#[cfg(feature = "http2")]
+const HTTP2_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
 // Multi-tier buffer pool for different request sizes
 thread_local! {
@@ -134,6 +136,16 @@ impl Server {
             format!("{}{}", self.prefix, path)
         };
         self.router.add_route(method, &full_path, Box::new(handler));
+        self
+    }
+
+    pub fn route_info(mut self, route: &crate::RouteInfo) -> Self {
+        self.router.add_route_info(route);
+        self
+    }
+
+    pub fn route_infos(mut self, routes: &[crate::RouteInfo]) -> Self {
+        self.router.add_routes_info_sorted(routes);
         self
     }
 
@@ -391,6 +403,11 @@ async fn handle_connection(
     ws_routes: Arc<std::collections::HashMap<String, Arc<dyn crate::websocket::WebSocketHandler>>>,
     plugins: Arc<Vec<Arc<dyn crate::Plugin>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "http2")]
+    if detect_http2_handshake(&socket).await? {
+        return handle_http2_connection(socket, router, middlewares, async_middlewares, remote_addr, plugins).await;
+    }
+
     let mut read_buf = get_buffer();
 
     loop {
@@ -620,6 +637,221 @@ async fn handle_connection(
             }
         }
     }
+}
+
+#[cfg(feature = "http2")]
+async fn detect_http2_handshake(socket: &TcpStream) -> std::io::Result<bool> {
+    let mut probe = [0u8; HTTP2_PREFACE.len()];
+    for _ in 0..8 {
+        let read = socket.peek(&mut probe).await?;
+        if read == 0 {
+            return Ok(false);
+        }
+
+        let cmp_len = read.min(HTTP2_PREFACE.len());
+        if probe[..cmp_len] != HTTP2_PREFACE[..cmp_len] {
+            return Ok(false);
+        }
+
+        if read >= HTTP2_PREFACE.len() {
+            return Ok(true);
+        }
+
+        socket.readable().await?;
+    }
+
+    Ok(false)
+}
+
+#[cfg(feature = "http2")]
+async fn handle_http2_connection(
+    socket: TcpStream,
+    router: Arc<Router>,
+    middlewares: Arc<Vec<Middleware>>,
+    async_middlewares: Arc<Vec<AsyncMiddleware>>,
+    remote_addr: std::net::SocketAddr,
+    plugins: Arc<Vec<Arc<dyn crate::Plugin>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut connection = h2::server::handshake(socket).await?;
+
+    while let Some(stream) = connection.accept().await {
+        let (request, respond) = stream?;
+        let router = Arc::clone(&router);
+        let middlewares = Arc::clone(&middlewares);
+        let async_middlewares = Arc::clone(&async_middlewares);
+        let plugins = Arc::clone(&plugins);
+
+        tokio::spawn(async move {
+            if let Err(err) = handle_http2_stream(
+                request,
+                respond,
+                router,
+                middlewares,
+                async_middlewares,
+                remote_addr,
+                plugins,
+            )
+            .await
+            {
+                eprintln!("[HTTP2] stream error: {err}");
+            }
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "http2")]
+async fn handle_http2_stream(
+    request: http::Request<h2::RecvStream>,
+    mut respond: h2::server::SendResponse<bytes::Bytes>,
+    router: Arc<Router>,
+    middlewares: Arc<Vec<Middleware>>,
+    async_middlewares: Arc<Vec<AsyncMiddleware>>,
+    remote_addr: std::net::SocketAddr,
+    plugins: Arc<Vec<Arc<dyn crate::Plugin>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (parts, mut body_stream) = request.into_parts();
+    let mut body = Vec::new();
+    while let Some(chunk) = body_stream.data().await {
+        let chunk = chunk?;
+        body.extend_from_slice(&chunk);
+    }
+
+    let mut header_map = AHashMap::with_capacity(parts.headers.len());
+    for (name, value) in parts.headers.iter() {
+        let value = match value.to_str() {
+            Ok(v) => v.to_string(),
+            Err(_) => String::from_utf8_lossy(value.as_bytes()).to_string(),
+        };
+        header_map
+            .entry(name.as_str().to_ascii_lowercase())
+            .or_insert_with(Vec::new)
+            .push(value);
+    }
+
+    let full_path = parts
+        .uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or_else(|| parts.uri.path());
+    let (path_only, query) = parse_path_and_query(full_path);
+
+    let mut request = Request::new(
+        parse_method(parts.method.as_str()),
+        Uri::new(path_only, query),
+        Version::Http2,
+        header_map,
+        body,
+        Some(remote_addr),
+    );
+    let mut response = Response::default();
+    let mut stopped = false;
+
+    for mw in middlewares.iter() {
+        match mw(&mut request, &mut response) {
+            Flow::Stop(final_res) => {
+                response = final_res;
+                stopped = true;
+                break;
+            }
+            Flow::Continue => {}
+        }
+    }
+
+    if !stopped {
+        for mw in async_middlewares.iter() {
+            match mw(&mut request, &mut response).await {
+                Flow::Stop(final_res) => {
+                    response = final_res;
+                    stopped = true;
+                    break;
+                }
+                Flow::Continue => {}
+            }
+        }
+    }
+
+    if !stopped {
+        for plugin in plugins.iter() {
+            match plugin.on_request(&mut request, &mut response).await {
+                Ok(Some(plugin_response)) => {
+                    response = plugin_response;
+                    stopped = true;
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("[PLUGIN] Error in {}: {}", plugin.name(), e);
+                }
+            }
+        }
+    }
+
+    if !stopped {
+        if let Some((handler, params)) = router.find(&request.method, path_only) {
+            request.params = params;
+            response = handler.call(request, response).await;
+        } else {
+            response = Response::new(crate::response::StatusCode::NotFound, b"Not Found\n");
+        }
+    }
+
+    write_http2_response(&mut respond, &mut response).await
+}
+
+#[cfg(feature = "http2")]
+async fn write_http2_response(
+    respond: &mut h2::server::SendResponse<bytes::Bytes>,
+    response: &mut Response,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let status = http::StatusCode::from_u16(response.status.code())
+        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR);
+    let mut builder = http::Response::builder().status(status);
+
+    for (key, value) in &response.headers {
+        if is_hop_by_hop_header(key) {
+            continue;
+        }
+        builder = builder.header(key.as_str(), value.as_str());
+    }
+
+    let body = response_body_to_vec(response).await?;
+    builder = builder.header("content-length", body.len().to_string());
+    builder = builder.header("content-type", response.headers.get("Content-Type").cloned().unwrap_or_else(|| "text/plain; charset=utf-8".to_string()));
+
+    let h2_response = builder.body(())?;
+    if body.is_empty() {
+        respond.send_response(h2_response, true)?;
+    } else {
+        let mut send_stream = respond.send_response(h2_response, false)?;
+        send_stream.send_data(bytes::Bytes::from(body), true)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "http2")]
+async fn response_body_to_vec(
+    response: &mut Response,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    match &mut response.body {
+        ResponseBody::Static(body) => Ok(body.clone()),
+        ResponseBody::Stream(reader) => {
+            let mut body = Vec::new();
+            reader.read_to_end(&mut body).await?;
+            Ok(body)
+        }
+    }
+}
+
+#[cfg(feature = "http2")]
+fn is_hop_by_hop_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("connection")
+        || name.eq_ignore_ascii_case("transfer-encoding")
+        || name.eq_ignore_ascii_case("keep-alive")
+        || name.eq_ignore_ascii_case("upgrade")
+        || name.eq_ignore_ascii_case("proxy-connection")
 }
 
 /// Intern common HTTP header names - returns &'static str when possible

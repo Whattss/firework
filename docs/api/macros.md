@@ -133,3 +133,37 @@ struct MyPlugin {
     config: String,
 }
 ```
+
+With Light Guard compile conditions:
+
+```rust
+#[plugin(guard(
+    feature = "auth|security",
+    message = "AuthPlugin requires feature 'auth'",
+    tip = "Enable it in Cargo.toml or run with --impure while prototyping."
+))]
+struct AuthPlugin;
+```
+
+`feature` supports OR semantics with `|` (any enabled feature passes).
+
+If the guard fails, compilation stops with:
+
+`Firework refuses to compile due ...`
+
+You can bypass Light Guard checks in CLI workflows with:
+
+`fwk run build --impure`
+
+Runtime guard modes:
+
+- `FIREWORK_LIGHT_GUARD=strict` (default): fail on errors, warn on soft issues.
+- `FIREWORK_LIGHT_GUARD=warn`: never fail, print all diagnostics as warnings.
+- `FIREWORK_LIGHT_GUARD=off`: disable guard (same effect as `--impure`).
+
+Light Guard now validates multiple Firework surfaces:
+
+- HTTP routes (canonical paths, params, method support, collisions, ambiguity hints).
+- WebSocket routes (path validity + duplicate detection).
+- Cross-surface overlaps (HTTP vs WebSocket path overlap warnings).
+- Plugin factory consistency (empty/duplicate naming diagnostics).

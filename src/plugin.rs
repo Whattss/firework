@@ -1,5 +1,6 @@
 use crate::{Request, Response};
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Plugin error type
@@ -112,29 +113,77 @@ impl PluginRegistry {
     
     /// Sort plugins by priority and dependencies
     fn sort_plugins(&mut self) -> PluginResult<()> {
-        // Simple priority-based sort for now
-        self.plugins.sort_by(|a, b| b.priority().cmp(&a.priority()));
-        Ok(())
-    }
-    
-    /// Validate plugin dependencies
-    pub async fn validate_all(&mut self) -> PluginResult<()> {
-        let plugin_names: Vec<&'static str> = self.plugins.iter()
-            .map(|p| p.name())
-            .collect();
-        
-        for plugin in &self.plugins {
+        let mut name_to_idx: HashMap<&'static str, usize> = HashMap::new();
+        for (idx, plugin) in self.plugins.iter().enumerate() {
+            if name_to_idx.insert(plugin.name(), idx).is_some() {
+                return Err(PluginError(format!(
+                    "Duplicate plugin name '{}' detected",
+                    plugin.name()
+                )));
+            }
+        }
+
+        let plugin_count = self.plugins.len();
+        let mut indegree = vec![0usize; plugin_count];
+        let mut outgoing = vec![Vec::<usize>::new(); plugin_count];
+
+        for (idx, plugin) in self.plugins.iter().enumerate() {
             for dep in plugin.depends_on() {
-                if !plugin_names.contains(&dep) {
+                let Some(&dep_idx) = name_to_idx.get(dep) else {
                     return Err(PluginError(format!(
                         "Plugin '{}' depends on '{}' which is not registered",
                         plugin.name(),
                         dep
                     )));
+                };
+                indegree[idx] += 1;
+                outgoing[dep_idx].push(idx);
+            }
+        }
+
+        let mut ready: Vec<usize> = (0..plugin_count).filter(|&i| indegree[i] == 0).collect();
+        let mut ordered = Vec::with_capacity(plugin_count);
+
+        while !ready.is_empty() {
+            ready.sort_by(|a, b| {
+                self.plugins[*b]
+                    .priority()
+                    .cmp(&self.plugins[*a].priority())
+                    .then_with(|| self.plugins[*a].name().cmp(self.plugins[*b].name()))
+            });
+
+            let next = ready.remove(0);
+            ordered.push(next);
+
+            for &dependent in &outgoing[next] {
+                indegree[dependent] = indegree[dependent].saturating_sub(1);
+                if indegree[dependent] == 0 {
+                    ready.push(dependent);
                 }
             }
         }
-        
+
+        if ordered.len() != plugin_count {
+            let blocked: Vec<&str> = (0..plugin_count)
+                .filter(|&i| indegree[i] > 0)
+                .map(|i| self.plugins[i].name())
+                .collect();
+            return Err(PluginError(format!(
+                "Circular plugin dependency detected involving: {}",
+                blocked.join(", ")
+            )));
+        }
+
+        let mut sorted = Vec::with_capacity(plugin_count);
+        for idx in ordered {
+            sorted.push(Arc::clone(&self.plugins[idx]));
+        }
+        self.plugins = sorted;
+        Ok(())
+    }
+    
+    /// Validate plugin dependencies
+    pub async fn validate_all(&mut self) -> PluginResult<()> {
         self.sort_plugins()?;
         Ok(())
     }
@@ -238,17 +287,115 @@ pub async fn get_plugin<T: Plugin + 'static>() -> Option<Arc<dyn Plugin>> {
 }
 
 /// Auto-register all plugins from distributed slice
-pub fn auto_register_plugins() {
+pub fn auto_register_plugins() -> PluginResult<()> {
     use crate::PLUGIN_FACTORIES;
     
-    tokio::task::block_in_place(|| {
+    tokio::task::block_in_place(|| -> PluginResult<()> {
         tokio::runtime::Handle::current().block_on(async {
             let mut reg = registry().write().await;
+            let mut existing: HashSet<String> = reg
+                .plugins
+                .iter()
+                .map(|p| p.name().to_string())
+                .collect();
             for factory in PLUGIN_FACTORIES {
+                if !existing.insert(factory.name.to_string()) {
+                    continue;
+                }
                 println!("[PLUGIN] Auto-registering: {}", factory.name);
                 let plugin = (factory.create)();
                 reg.register(plugin);
             }
+            reg.validate_all().await?;
+            Ok(())
         })
-    });
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestPlugin {
+        name: &'static str,
+        deps: Vec<&'static str>,
+        priority: i32,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for TestPlugin {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn priority(&self) -> i32 {
+            self.priority
+        }
+
+        fn depends_on(&self) -> Vec<&'static str> {
+            self.deps.clone()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_detects_missing_dependencies() {
+        let mut registry = PluginRegistry::new();
+        registry.register(Arc::new(TestPlugin {
+            name: "auth",
+            deps: vec!["db"],
+            priority: 10,
+        }));
+
+        let err = registry.validate_all().await.expect_err("should fail");
+        assert!(err.0.contains("depends on 'db'"));
+    }
+
+    #[tokio::test]
+    async fn validate_detects_cycles() {
+        let mut registry = PluginRegistry::new();
+        registry.register(Arc::new(TestPlugin {
+            name: "a",
+            deps: vec!["b"],
+            priority: 10,
+        }));
+        registry.register(Arc::new(TestPlugin {
+            name: "b",
+            deps: vec!["a"],
+            priority: 10,
+        }));
+
+        let err = registry.validate_all().await.expect_err("should fail");
+        assert!(err.0.contains("Circular plugin dependency"));
+    }
+
+    #[tokio::test]
+    async fn validate_applies_topological_order_with_priority_tiebreak() {
+        let mut registry = PluginRegistry::new();
+        registry.register(Arc::new(TestPlugin {
+            name: "db",
+            deps: vec![],
+            priority: 10,
+        }));
+        registry.register(Arc::new(TestPlugin {
+            name: "auth",
+            deps: vec!["db"],
+            priority: 100,
+        }));
+        registry.register(Arc::new(TestPlugin {
+            name: "metrics",
+            deps: vec![],
+            priority: 50,
+        }));
+
+        registry.validate_all().await.expect("must pass");
+        let names: Vec<&str> = registry.plugins().iter().map(|p| p.name()).collect();
+
+        let db_pos = names.iter().position(|n| *n == "db").unwrap();
+        let auth_pos = names.iter().position(|n| *n == "auth").unwrap();
+        assert!(db_pos < auth_pos, "db must be initialized before auth");
+    }
 }

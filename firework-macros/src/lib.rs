@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemFn, ItemMod, ItemStruct, LitStr};
+use syn::parse::Parser;
+use syn::{parse_macro_input, ItemFn, ItemMod, ItemStruct, LitStr, Meta};
 
 #[proc_macro_attribute]
 pub fn get(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -34,6 +35,9 @@ pub fn ws(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn websocket_macro(attr: TokenStream, item: TokenStream) -> TokenStream {
     let path = parse_macro_input!(attr as LitStr).value();
+    if let Err(err) = validate_path_for_light_guard(&path, "websocket route") {
+        return compile_error_output(err);
+    }
     let input = parse_macro_input!(item as ItemFn);
     let fn_name = &input.sig.ident;
     let wrapper_name = syn::Ident::new(
@@ -62,6 +66,137 @@ fn websocket_macro(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     
     output.into()
+}
+
+fn compile_error_output(message: impl Into<String>) -> TokenStream {
+    let message = message.into();
+    quote! { compile_error!(#message); }.into()
+}
+
+fn is_impure_enabled() -> bool {
+    std::env::var("FIREWORK_IMPURE")
+        .map(|v| {
+            let s = v.trim().to_ascii_lowercase();
+            s == "1" || s == "true" || s == "yes" || s == "on"
+        })
+        .unwrap_or(false)
+}
+
+fn firework_refuse_message(reason: &str, tip: Option<&str>) -> String {
+    let mut msg = format!("Firework refuses to compile due {reason}");
+    if let Some(tip) = tip {
+        msg.push_str("\\nTip: ");
+        msg.push_str(tip);
+    }
+    msg
+}
+
+#[derive(Default)]
+struct PluginGuardCondition {
+    feature: Option<String>,
+    message: Option<String>,
+    tip: Option<String>,
+}
+
+fn parse_plugin_guard_condition(list: &syn::MetaList) -> Option<PluginGuardCondition> {
+    let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
+    let nested = parser.parse2(list.tokens.clone()).ok()?;
+    let mut guard = PluginGuardCondition::default();
+    for meta in nested {
+        if let Meta::NameValue(nv) = meta {
+            if nv.path.is_ident("feature") {
+                if let syn::Expr::Lit(expr_lit) = nv.value {
+                    if let syn::Lit::Str(value) = expr_lit.lit {
+                        guard.feature = Some(value.value());
+                    }
+                }
+            } else if nv.path.is_ident("message") {
+                if let syn::Expr::Lit(expr_lit) = nv.value {
+                    if let syn::Lit::Str(value) = expr_lit.lit {
+                        guard.message = Some(value.value());
+                    }
+                }
+            } else if nv.path.is_ident("tip") {
+                if let syn::Expr::Lit(expr_lit) = nv.value {
+                    if let syn::Lit::Str(value) = expr_lit.lit {
+                        guard.tip = Some(value.value());
+                    }
+                }
+            }
+        }
+    }
+    Some(guard)
+}
+
+fn plugin_guard_failed(feature: &str) -> bool {
+    feature.split('|').all(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return true;
+        }
+        let env_key = format!(
+            "CARGO_FEATURE_{}",
+            trimmed.replace('-', "_").to_ascii_uppercase()
+        );
+        std::env::var(env_key).is_err()
+    })
+}
+
+fn validate_path_for_light_guard(path: &str, context: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err(firework_refuse_message(
+            &format!("{context} path cannot be empty"),
+            Some("Use absolute paths like \"/api/users\"."),
+        ));
+    }
+    if !path.starts_with('/') {
+        return Err(firework_refuse_message(
+            &format!("{context} path '{path}' must start with '/'"),
+            Some("Prefix route and scope paths with '/'."),
+        ));
+    }
+    if path.contains("//") {
+        return Err(firework_refuse_message(
+            &format!("{context} path '{path}' contains duplicate '/' segments"),
+            Some("Normalize the path and remove duplicated slashes."),
+        ));
+    }
+    if path.len() > 1 && path.ends_with('/') {
+        return Err(firework_refuse_message(
+            &format!("{context} path '{path}' should not end with '/'"),
+            Some("Use canonical path forms without a trailing slash."),
+        ));
+    }
+
+    for segment in path.split('/') {
+        if !segment.starts_with(':') {
+            continue;
+        }
+        if segment.len() <= 1 {
+            return Err(firework_refuse_message(
+                &format!("{context} path '{path}' contains an empty parameter"),
+                Some("Use named params like ':id'."),
+            ));
+        }
+        let name = &segment[1..];
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return Err(firework_refuse_message(
+                &format!("{context} path '{path}' contains an empty parameter"),
+                Some("Use named params like ':id'."),
+            ));
+        };
+        let valid_start = first == '_' || first.is_ascii_alphabetic();
+        let valid_rest = chars.all(|c| c == '_' || c.is_ascii_alphanumeric());
+        if !valid_start || !valid_rest {
+            return Err(firework_refuse_message(
+                &format!("{context} path '{path}' has invalid parameter ':{}'", name),
+                Some("Parameter names must match [A-Za-z_][A-Za-z0-9_]*."),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 #[proc_macro_attribute]
@@ -136,6 +271,9 @@ pub fn middleware(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 fn route_macro(method: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let path = parse_macro_input!(attr as LitStr).value();
+    if let Err(err) = validate_path_for_light_guard(&path, "route") {
+        return compile_error_output(err);
+    }
     
     // Check if we're the innermost macro by looking if input already has the wrapper
     let item_str = item.to_string();
@@ -248,6 +386,12 @@ fn route_macro(method: &str, attr: TokenStream, item: TokenStream) -> TokenStrea
             method: #method,
             path: #path,
             handler: #wrapper_name,
+            precomputed_hash: if ::firework::__private::const_is_static_path(#path) {
+                ::firework::__private::const_hash_route(#method, #path)
+            } else {
+                0
+            },
+            is_static_path: ::firework::__private::const_is_static_path(#path),
         };
     };
     
@@ -269,6 +413,10 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
         if let Some(prefix_end) = attr_str[prefix_start + 1..].find('"') {
             prefix = attr_str[prefix_start + 1..prefix_start + 1 + prefix_end].to_string();
         }
+    }
+
+    if let Err(err) = validate_path_for_light_guard(&prefix, "scope") {
+        return compile_error_output(err);
     }
     
     // Parse middleware arrays
@@ -337,8 +485,14 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
                     } else {
                         String::new()
                     };
+                    if let Err(err) = validate_path_for_light_guard(&path, "scope route") {
+                        return compile_error_output(err);
+                    }
                     
                     let full_path = format!("{}{}", prefix, path);
+                    if let Err(err) = validate_path_for_light_guard(&full_path, "scoped route") {
+                        return compile_error_output(err);
+                    }
                     let fn_name = &func.sig.ident;
                     let wrapper_name = syn::Ident::new(
                         &format!("__wrapper_{}", fn_name),
@@ -522,6 +676,12 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
                             method: #method_upper,
                             path: #full_path,
                             handler: #wrapper_name,
+                            precomputed_hash: if ::firework::__private::const_is_static_path(#full_path) {
+                                ::firework::__private::const_hash_route(#method_upper, #full_path)
+                            } else {
+                                0
+                            },
+                            is_static_path: ::firework::__private::const_is_static_path(#full_path),
                         };
                     });
                 } else {
@@ -547,6 +707,15 @@ pub fn scope(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn routes(_item: TokenStream) -> TokenStream {
     let output = quote! {
         {
+            if let Err(err) = ::firework::__private::enforce_light_guard(
+                &*::firework::ROUTES,
+                &*::firework::WS_ROUTES,
+                &*::firework::SCOPE_MIDDLEWARES,
+                &*::firework::PLUGIN_FACTORIES,
+            ) {
+                panic!("{err}");
+            }
+
             let mut server = ::firework::Server::new();
             
             // Register global middlewares (those with Pre phase)
@@ -564,15 +733,12 @@ pub fn routes(_item: TokenStream) -> TokenStream {
             }
             
             // Register HTTP routes
-            for route in ::firework::ROUTES {
-                server = match route.method {
-                    "GET" => server.get(route.path, route.handler),
-                    "POST" => server.post(route.path, route.handler),
-                    "PUT" => server.put(route.path, route.handler),
-                    "PATCH" => server.patch(route.path, route.handler),
-                    "DELETE" => server.delete(route.path, route.handler),
-                    _ => server.route(route.method, route.path, route.handler),
-                };
+            server = server.route_infos(&*::firework::ROUTES);
+            if let Err(err) = ::firework::__private::update_routes_manifest_for_source_root(
+                &*::firework::ROUTES,
+                env!("CARGO_MANIFEST_DIR"),
+            ) {
+                eprintln!("⚠️ failed to update routes manifest for PHF build: {err}");
             }
             
             // Register WebSocket routes
@@ -657,18 +823,26 @@ pub fn run(input: TokenStream) -> TokenStream {
     let output = quote! {
         {
             async fn __firework_run_async() {
+                if let Err(err) = ::firework::__private::enforce_light_guard(
+                    &*::firework::ROUTES,
+                    &*::firework::WS_ROUTES,
+                    &*::firework::SCOPE_MIDDLEWARES,
+                    &*::firework::PLUGIN_FACTORIES,
+                ) {
+                    panic!("{err}");
+                }
+
                 // Load configuration
                 let _ = ::firework::init_config(#config_file).await;
                 let config = ::firework::get_config().await;
                 
-                // Auto-register plugins from PLUGIN_FACTORIES
-                for factory in ::firework::PLUGIN_FACTORIES {
-                    let plugin = (factory.create)();
-                    ::firework::register_plugin(plugin);
+                // Auto-register plugins from PLUGIN_FACTORIES and validate dependency graph
+                if let Err(err) = ::firework::auto_register_plugins() {
+                    panic!(
+                        "Firework refuses to compile due plugin dependency graph validation failed: {}",
+                        err
+                    );
                 }
-                
-                // Initialize all plugins
-                let _ = ::firework::auto_register_plugins().await;
                 
                 // Build server with routes and middleware
                 let mut server = ::firework::Server::new();
@@ -688,15 +862,14 @@ pub fn run(input: TokenStream) -> TokenStream {
                 }
                 
                 // Register HTTP routes
-                for route in ::firework::ROUTES {
-                    server = match route.method {
-                        "GET" => server.get(route.path, route.handler),
-                        "POST" => server.post(route.path, route.handler),
-                        "PUT" => server.put(route.path, route.handler),
-                        "PATCH" => server.patch(route.path, route.handler),
-                        "DELETE" => server.delete(route.path, route.handler),
-                        _ => server.route(route.method, route.path, route.handler),
-                    };
+                server = server.route_infos(&*::firework::ROUTES);
+                
+                // Automatic PHF manifest export (no user action required).
+                if let Err(err) = ::firework::__private::update_routes_manifest_for_source_root(
+                    &*::firework::ROUTES,
+                    env!("CARGO_MANIFEST_DIR"),
+                ) {
+                    eprintln!("⚠️ failed to update routes manifest for PHF build: {err}");
                 }
                 
                 // Register WebSocket routes
@@ -772,7 +945,33 @@ pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
     
     // Parse attribute for auto-registration
     let attr_str = attr.to_string();
-    let auto_register = !attr_str.is_empty();
+    let auto_register = attr_str.contains("name");
+    let mut guard = PluginGuardCondition::default();
+    if !attr.is_empty() {
+        let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
+        if let Ok(items) = parser.parse(attr.clone()) {
+            for meta in items {
+                if let Meta::List(list) = meta {
+                    if list.path.is_ident("guard") {
+                        if let Some(parsed) = parse_plugin_guard_condition(&list) {
+                            guard = parsed;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(feature) = guard.feature.as_deref() {
+        if !is_impure_enabled() && plugin_guard_failed(feature) {
+            let reason = guard
+                .message
+                .as_deref()
+                .unwrap_or("a plugin guard requirement failed");
+            let tip = guard.tip.as_deref().or(Some("Enable the required Cargo feature or use --impure."));
+            return compile_error_output(firework_refuse_message(reason, tip));
+        }
+    }
     
     let registration = if auto_register {
         // Generate a constructor function that can be used for auto-registration

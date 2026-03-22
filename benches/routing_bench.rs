@@ -1,7 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use firework::router::Router;
-use firework::{AsyncHandler, Method, Request, Response, Uri, Version};
-use std::collections::HashMap;
+use firework::Router;
+use firework::{Method, Request, Response};
 use std::future::Future;
 use std::pin::Pin;
 

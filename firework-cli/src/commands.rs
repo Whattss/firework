@@ -42,32 +42,32 @@ pub fn create_config() {
     println!("{} Created Firework.toml", "✓".bright_green());
 }
 
-pub fn run_dev(hot_reload: bool) {
+pub fn run_dev(hot_reload: bool, impure: bool) {
     println!("{} Starting development server...", "🚀".bright_yellow());
     
     if hot_reload {
         println!("{} Hot reload enabled", "🔥".bright_yellow());
-        run_with_file_watcher();
+        run_with_file_watcher(impure);
     } else {
-        run_cargo(&["run"]);
+        run_cargo(&["run"], impure);
     }
 }
 
-pub fn run_release() {
+pub fn run_release(impure: bool) {
     println!("{} Building release...", "📦".bright_yellow());
-    run_cargo(&["build", "--release"]);
+    run_cargo(&["build", "--release"], impure);
     
     println!("{} Running release binary...", "🚀".bright_yellow());
     let binary = get_binary_name();
-    run_command("./target/release/", &binary, &[]);
+    run_command("./target/release/", &binary, &[], impure);
 }
 
-pub fn run_build() {
+pub fn run_build(impure: bool) {
     println!("{} Building project...", "🔨".bright_yellow());
-    run_cargo(&["build"]);
+    run_cargo(&["build"], impure);
 }
 
-pub fn run_script(name: &str) {
+pub fn run_script(name: &str, impure: bool) {
     let config_path = Path::new("Firework.toml");
     if !config_path.exists() {
         eprintln!("{} Firework.toml not found", "✗".bright_red());
@@ -80,7 +80,7 @@ pub fn run_script(name: &str) {
     if let Some(scripts) = config.get("scripts").and_then(|s| s.as_table()) {
         if let Some(script) = scripts.get(name).and_then(|s| s.as_str()) {
             println!("{} Running script: {}", "⚡".bright_yellow(), name.bright_cyan());
-            run_shell_command(script);
+            run_shell_command(script, impure);
         } else {
             eprintln!("{} Script '{}' not found in Firework.toml", "✗".bright_red(), name);
             std::process::exit(1);
@@ -91,7 +91,7 @@ pub fn run_script(name: &str) {
     }
 }
 
-fn run_with_file_watcher() {
+fn run_with_file_watcher(impure: bool) {
     use notify::{Watcher, RecursiveMode, Event};
     use std::sync::mpsc::channel;
     use std::time::Duration;
@@ -129,12 +129,15 @@ fn run_with_file_watcher() {
             println!("\n{} Rebuilding and restarting...", "🔄".bright_yellow());
             
             // Build the project
-            let build_status = Command::new("cargo")
-                .args(&["build"])
+            let mut build_cmd = Command::new("cargo");
+            build_cmd.args(&["build"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status();
+                .stderr(Stdio::inherit());
+            if impure {
+                build_cmd.env("FIREWORK_IMPURE", "1");
+            }
+            let build_status = build_cmd.status();
                 
             if let Ok(status) = build_status {
                 if status.success() {
@@ -142,12 +145,15 @@ fn run_with_file_watcher() {
                     let binary_name = get_binary_name();
                     let binary_path = format!("./target/debug/{}", binary_name);
                     
-                    child = Command::new(&binary_path)
+                    let mut run_cmd = Command::new(&binary_path);
+                    run_cmd
                         .stdin(Stdio::null())
                         .stdout(Stdio::inherit())
-                        .stderr(Stdio::inherit())
-                        .spawn()
-                        .ok();
+                        .stderr(Stdio::inherit());
+                    if impure {
+                        run_cmd.env("FIREWORK_IMPURE", "1");
+                    }
+                    child = run_cmd.spawn().ok();
                 } else {
                     println!("{} Build failed, waiting for changes...", "✗".bright_red());
                 }
@@ -179,43 +185,51 @@ fn run_with_file_watcher() {
     }
 }
 
-fn run_cargo(args: &[&str]) {
-    let status = Command::new("cargo")
-        .args(args)
+fn run_cargo(args: &[&str], impure: bool) {
+    let mut cmd = Command::new("cargo");
+    cmd.args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .expect("Failed to run cargo");
+        .stderr(Stdio::inherit());
+    if impure {
+        cmd.env("FIREWORK_IMPURE", "1");
+    }
+    let status = cmd.status().expect("Failed to run cargo");
     
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
 }
 
-fn run_command(dir: &str, cmd: &str, args: &[&str]) {
-    let status = Command::new(format!("{}{}", dir, cmd))
+fn run_command(dir: &str, cmd: &str, args: &[&str], impure: bool) {
+    let mut command = Command::new(format!("{}{}", dir, cmd));
+    command
         .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .expect("Failed to run command");
+        .stderr(Stdio::inherit());
+    if impure {
+        command.env("FIREWORK_IMPURE", "1");
+    }
+    let status = command.status().expect("Failed to run command");
     
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
 }
 
-fn run_shell_command(cmd: &str) {
-    let status = Command::new("sh")
+fn run_shell_command(cmd: &str, impure: bool) {
+    let mut shell = Command::new("sh");
+    shell
         .arg("-c")
         .arg(cmd)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .expect("Failed to run shell command");
+        .stderr(Stdio::inherit());
+    if impure {
+        shell.env("FIREWORK_IMPURE", "1");
+    }
+    let status = shell.status().expect("Failed to run shell command");
     
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));

@@ -7,6 +7,9 @@ mod templates;
 #[command(name = "fwk")]
 #[command(about = "Firework CLI - Build blazing fast web applications", long_about = None)]
 struct Cli {
+    #[arg(long, global = true, help = "Bypass Light Guard checks (sets FIREWORK_IMPURE=1)")]
+    impure: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -85,13 +88,14 @@ enum RunTask {
 
 fn main() {
     let cli = Cli::parse();
+    let impure = cli.impure;
 
     match cli.command {
         Commands::New { name, template } => {
             commands::new_project(&name, template.as_deref());
         }
         Commands::Dev => {
-            commands::run_dev(true); // Always enable hot reload for dev alias
+            commands::run_dev(true, impure); // Always enable hot reload for dev alias
         }
         Commands::Routes {
             filter,
@@ -109,16 +113,16 @@ fn main() {
         },
         Commands::Run { task } => match task {
             RunTask::Dev { hot_reload } => {
-                commands::run_dev(hot_reload);
+                commands::run_dev(hot_reload, impure);
             }
             RunTask::Release => {
-                commands::run_release();
+                commands::run_release(impure);
             }
             RunTask::Build => {
-                commands::run_build();
+                commands::run_build(impure);
             }
             RunTask::Script { name } => {
-                commands::run_script(&name);
+                commands::run_script(&name, impure);
             }
         },
     }
