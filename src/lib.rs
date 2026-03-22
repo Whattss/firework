@@ -58,7 +58,7 @@ pub use validator::Validate;
 
 // Re-export macros
 pub use firework_macros::{
-    get, post, put, patch, delete, ws, middleware, routes, scope, 
+    get, post, put, patch, delete, ws, middleware, routes, run, scope, 
     plugin, plugin_builder, firework_test,
     on_init, on_start, on_shutdown, on_reload, on_request, on_response, on_stream_accept,
     depends_on, priority
@@ -170,11 +170,19 @@ pub mod prelude {
     
     pub use firework_macros::{
         get, post, put, patch, delete, ws,
-        middleware, routes, scope, 
+        middleware, routes, run, scope, 
         plugin, plugin_builder, firework_test,
         on_init, on_start, on_shutdown, on_reload, on_request, on_response, on_stream_accept,
         depends_on, priority
     };
+    
+    // Re-export common macros
+    pub use crate::{json, html, text, redirect, stream};
+    
+    // Re-export serde for user convenience
+    pub use serde::{Deserialize, Serialize};
+    pub use serde_json;
+    pub use validator::Validate;
     
     
     #[cfg(any(test, feature = "testing"))]

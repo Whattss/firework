@@ -587,6 +587,164 @@ pub fn routes(_item: TokenStream) -> TokenStream {
     output.into()
 }
 
+/// Ultimate convenience macro - Auto-configures and runs the entire application
+/// 
+/// This macro:
+/// 1. Loads configuration from Firework.toml
+/// 2. Auto-registers all plugins with #[plugin] attribute
+/// 3. Registers all routes and middleware
+/// 4. Starts the server on configured address/port
+/// 
+/// # Basic Usage
+/// 
+/// ```rust
+/// use firework::prelude::*;
+/// 
+/// #[get("/")]
+/// async fn index() -> &'static str {
+///     "Hello, Firework! 🔥"
+/// }
+/// 
+/// fn main() {
+///     run!();
+/// }
+/// ```
+/// 
+/// # Custom Address
+/// 
+/// ```rust
+/// fn main() {
+///     run!("0.0.0.0:3000");
+/// }
+/// ```
+/// 
+/// # With Custom Config Path
+/// 
+/// ```rust
+/// fn main() {
+///     run!(config = "./custom/config.toml");
+/// }
+/// ```
+#[proc_macro]
+pub fn run(input: TokenStream) -> TokenStream {
+    let input_str = input.to_string();
+    
+    // Parse optional address argument
+    let (address_override, config_path) = if input_str.is_empty() {
+        (None, None)
+    } else if input_str.contains("config") {
+        // run!(config = "./path/to/config.toml")
+        let config_path = input_str
+            .split('=')
+            .nth(1)
+            .map(|s| s.trim().trim_matches('"').to_string());
+        (None, config_path)
+    } else {
+        // run!("127.0.0.1:8080")
+        (Some(input_str.trim_matches('"').to_string()), None)
+    };
+    
+    let config_file = config_path.unwrap_or_else(|| "Firework.toml".to_string());
+    
+    let get_address = if let Some(addr) = address_override {
+        quote! { #addr.to_string() }
+    } else {
+        quote! {
+            format!("{}:{}", config.server.address, config.server.port)
+        }
+    };
+    
+    let output = quote! {
+        {
+            async fn __firework_run_async() {
+                // Load configuration
+                let _ = ::firework::init_config(#config_file).await;
+                let config = ::firework::get_config().await;
+                
+                // Auto-register plugins from PLUGIN_FACTORIES
+                for factory in ::firework::PLUGIN_FACTORIES {
+                    let plugin = (factory.create)();
+                    ::firework::register_plugin(plugin);
+                }
+                
+                // Initialize all plugins
+                let _ = ::firework::auto_register_plugins().await;
+                
+                // Build server with routes and middleware
+                let mut server = ::firework::Server::new();
+                
+                // Register global middlewares (Pre phase)
+                for mw in ::firework::SCOPE_MIDDLEWARES {
+                    if mw.phase == ::firework::MiddlewarePhase::Pre {
+                        match &mw.handler {
+                            ::firework::MiddlewareHandler::Sync(handler) => {
+                                server = server.middleware(*handler);
+                            }
+                            ::firework::MiddlewareHandler::Async(handler) => {
+                                server = server.async_middleware(*handler);
+                            }
+                        }
+                    }
+                }
+                
+                // Register HTTP routes
+                for route in ::firework::ROUTES {
+                    server = match route.method {
+                        "GET" => server.get(route.path, route.handler),
+                        "POST" => server.post(route.path, route.handler),
+                        "PUT" => server.put(route.path, route.handler),
+                        "PATCH" => server.patch(route.path, route.handler),
+                        "DELETE" => server.delete(route.path, route.handler),
+                        _ => server.route(route.method, route.path, route.handler),
+                    };
+                }
+                
+                // Register WebSocket routes
+                for ws_route in ::firework::WS_ROUTES {
+                    server = server.websocket(ws_route.path, ws_route.handler);
+                }
+                
+                // Register post-middlewares
+                for mw in ::firework::SCOPE_MIDDLEWARES {
+                    if mw.phase == ::firework::MiddlewarePhase::Post {
+                        match &mw.handler {
+                            ::firework::MiddlewareHandler::Sync(handler) => {
+                                server = server.middleware(*handler);
+                            }
+                            ::firework::MiddlewareHandler::Async(handler) => {
+                                server = server.async_middleware(*handler);
+                            }
+                        }
+                    }
+                }
+                
+                // Determine address
+                let address = #get_address;
+                
+                println!("🔥 Firework server starting on http://{}", address);
+                println!("📦 Loaded {} plugin(s)", ::firework::PLUGIN_FACTORIES.len());
+                println!("🛣️  Registered {} route(s)", ::firework::ROUTES.len());
+                println!("🔌 Registered {} WebSocket route(s)", ::firework::WS_ROUTES.len());
+                println!("⚡ Ready to accept connections\n");
+                
+                // Start server
+                server.listen(&address)
+                    .await
+                    .expect("Failed to start server");
+            }
+            
+            #[::tokio::main]
+            async fn __firework_run_main() {
+                __firework_run_async().await;
+            }
+            
+            __firework_run_main();
+        }
+    };
+    
+    output.into()
+}
+
 /// Macro for creating plugins
 /// 
 /// Usage:
